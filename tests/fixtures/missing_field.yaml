@@ -1,0 +1,7 @@
+apiVersion: v1alpha1
+sinks: []
+templates: []
+routes:
+  - id: prometheus-in
+    template_ref: alert-basic
+    forward_to: []

@@ -1,0 +1,4 @@
+apiVersion: v1alpha1
+sinks: [
+  - id: broken
+    type: matrix

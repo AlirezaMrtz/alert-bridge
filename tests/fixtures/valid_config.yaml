@@ -1,0 +1,19 @@
+apiVersion: v1alpha1
+sinks:
+  - id: matrix-ops
+    type: matrix
+    config:
+      room_id: "!abc123:matrix.example.com"
+      access_token: "${MATRIX_TOKEN}"
+templates:
+  - id: alert-basic
+    engine: jinja2
+    format: markdown
+    body: |
+      **Alert**: {{ payload.message }}
+routes:
+  - id: prometheus-in
+    secret_token: "supersecrettoken123"
+    template_ref: alert-basic
+    forward_to:
+      - matrix-ops
