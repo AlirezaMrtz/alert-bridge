@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, Field, SecretStr, ValidationError
+from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
 
 logger = logging.getLogger("bridge.config")
 
@@ -44,6 +44,15 @@ class BridgeConfig(BaseModel):
     sinks: list[SinkConfig]
     templates: list[TemplateConfig]
     routes: list[RouteConfig]
+
+    @model_validator(mode="after")
+    def validate_template_refs(self) -> BridgeConfig:
+        template_ids = {t.id for t in self.templates}
+        for route in self.routes:
+            if route.template_ref not in template_ids:
+                raise ValueError(f"Route '{route.id}' references nonexistent template '{route.template_ref}'")
+        return self
+
 
     def sink_by_id(self, sink_id: str) -> SinkConfig | None:
         return next((s for s in self.sinks if s.id == sink_id), None)

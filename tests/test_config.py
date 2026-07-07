@@ -42,3 +42,9 @@ def test_missing_required_field_raises():
 def test_missing_file_raises():
     with pytest.raises(ConfigError, match="not found"):
         load_config(FIXTURES / "does_not_exist.yaml")
+
+
+def test_nonexistent_template_ref_raises(monkeypatch):
+    monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
+    with pytest.raises(ConfigError, match="references nonexistent template"):
+        load_config(FIXTURES / "nonexistent_template.yaml")
