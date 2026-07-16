@@ -12,6 +12,12 @@ def client(monkeypatch):
     # Dynamically inject the test configuration fixture into app state for tests
     monkeypatch.setenv("MATRIX_TOKEN", "mock-matrix-token")
     monkeypatch.setattr("app.main.CONFIG_PATH", str(FIXTURES / "valid_config.yaml"))
+    
+    # Mock SinkDispatcher.dispatch to prevent downstream network requests during ingress tests
+    async def mock_dispatch(self, sink_id: str, message: str) -> bool:
+        return True
+    monkeypatch.setattr("app.dispatcher.SinkDispatcher.dispatch", mock_dispatch)
+
     with TestClient(app) as client:
         yield client
 

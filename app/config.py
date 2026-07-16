@@ -53,6 +53,24 @@ class BridgeConfig(BaseModel):
                 raise ValueError(f"Route '{route.id}' references nonexistent template '{route.template_ref}'")
         return self
 
+    @model_validator(mode="after")
+    def validate_matrix_sinks(self) -> BridgeConfig:
+        """Every matrix sink must declare 'homeserver_url' in its config.
+
+        The homeserver URL cannot be derived automatically, so it must be
+        provided explicitly (e.g. 'https://matrix.example.com').
+        """
+        for sink in self.sinks:
+            if sink.type == "matrix":
+                if not sink.config.get("homeserver_url"):
+                    raise ValueError(
+                        f"Sink '{sink.id}' (type: matrix) is missing required field "
+                        f"'homeserver_url'. Matrix sinks must declare the homeserver "
+                        f"URL explicitly (e.g. 'https://matrix.example.com'). "
+                        f"It cannot be inferred from the room ID reliably."
+                    )
+        return self
+
 
     def sink_by_id(self, sink_id: str) -> SinkConfig | None:
         return next((s for s in self.sinks if s.id == sink_id), None)

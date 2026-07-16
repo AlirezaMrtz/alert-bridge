@@ -5,6 +5,7 @@ sinks:
     config:
       room_id: "!abc123:matrix.example.com"
       access_token: "${MATRIX_TOKEN}"
+      homeserver_url: "https://matrix.example.com"
 templates:
   - id: alert-basic
     engine: jinja2

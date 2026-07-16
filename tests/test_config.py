@@ -48,3 +48,9 @@ def test_nonexistent_template_ref_raises(monkeypatch):
     monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
     with pytest.raises(ConfigError, match="references nonexistent template"):
         load_config(FIXTURES / "nonexistent_template.yaml")
+
+
+def test_matrix_sink_missing_homeserver_url_raises(monkeypatch):
+    monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
+    with pytest.raises(ConfigError, match="missing required field 'homeserver_url'"):
+        load_config(FIXTURES / "matrix_missing_homeserver.yaml")
