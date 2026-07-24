@@ -4,7 +4,7 @@ import hmac
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import Body, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Query, Request, status
 
 
 from app.config import load_config, BridgeConfig
@@ -33,10 +33,11 @@ app = FastAPI(
 
 
 
-@app.post("/alerts/{route_id}", status_code=status.HTTP_200_OK)
+@app.post("/alerts/{route_id}", status_code=status.HTTP_202_ACCEPTED)
 async def handle_alert(
     route_id: str,
     request: Request,
+    background_tasks: BackgroundTasks,
     payload: dict = Body(default={}),
     token: str | None = Query(default=None, description="Secret token for authentication"),
     x_secret_token: str | None = Header(default=None, alias="X-Secret-Token"),
@@ -76,17 +77,12 @@ async def handle_alert(
     
     rendered_message = engine.render(template_body, payload, query_params)
 
-    # 6. Dispatch to sinks
+    # 6. Schedule background dispatch to sinks
     dispatcher: SinkDispatcher = app.state.dispatcher
-    dispatched_sinks = []
-    
-    for sink_id in route.forward_to:
-        success = await dispatcher.dispatch(sink_id, rendered_message)
-        if success:
-            dispatched_sinks.append(sink_id)
+    background_tasks.add_task(dispatcher.dispatch_many, route.forward_to, rendered_message)
 
     return {
-        "status": "success",
+        "status": "accepted",
         "route": route_id,
-        "dispatched_to": dispatched_sinks,
+        "scheduled_sinks": route.forward_to,
     }

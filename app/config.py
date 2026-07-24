@@ -4,7 +4,7 @@ import logging
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, SecretStr, ValidationError, model_validator
@@ -21,7 +21,7 @@ class ConfigError(Exception):
 
 class SinkConfig(BaseModel):
     id: str
-    type: str
+    type: Literal["matrix", "webhook"]
     config: dict[str, Any] = Field(default_factory=dict)
 
 

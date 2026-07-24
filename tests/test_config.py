@@ -54,3 +54,8 @@ def test_matrix_sink_missing_homeserver_url_raises(monkeypatch):
     monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
     with pytest.raises(ConfigError, match="missing required field 'homeserver_url'"):
         load_config(FIXTURES / "matrix_missing_homeserver.yaml")
+
+
+def test_invalid_sink_type_raises():
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(FIXTURES / "invalid_sink_type.yaml")

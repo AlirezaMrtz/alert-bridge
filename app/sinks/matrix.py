@@ -14,26 +14,24 @@ logger = logging.getLogger("bridge.sinks.matrix")
 class MatrixSink(BaseSink):
     """Concrete sink implementation for dispatching messages to Matrix rooms."""
 
-    async def send(self, message: str) -> bool:
+    async def send(self, message: str) -> tuple[bool, str | None]:
         room_id = self.config.get("room_id")
         access_token = self.config.get("access_token")
 
         if not room_id or not access_token:
-            logger.error(
-                "Matrix sink '%s' missing required configuration (room_id or access_token)",
-                self.sink_id,
-            )
-            return False
+            err_msg = f"Matrix sink '{self.sink_id}' missing required configuration (room_id or access_token)"
+            logger.error(err_msg)
+            return (False, err_msg)
 
         # homeserver_url must be declared explicitly in the sink config.
         homeserver = self.config.get("homeserver_url")
         if not homeserver:
-            logger.error(
-                "Matrix sink '%s' is missing required field 'homeserver_url'. "
-                "Refusing to guess from the room ID. Add 'homeserver_url' to the sink config.",
-                self.sink_id,
+            err_msg = (
+                f"Matrix sink '{self.sink_id}' is missing required field 'homeserver_url'. "
+                "Refusing to guess from the room ID. Add 'homeserver_url' to the sink config."
             )
-            return False
+            logger.error(err_msg)
+            return (False, err_msg)
 
         txn_id = uuid.uuid4().hex
         url = f"{homeserver.rstrip('/')}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
@@ -51,12 +49,8 @@ class MatrixSink(BaseSink):
             async with httpx.AsyncClient() as client:
                 response = await client.put(url, headers=headers, json=json_data, timeout=10.0)
                 response.raise_for_status()
-                return True
+                return (True, None)
         except (httpx.TimeoutException, httpx.HTTPError) as exc:
-            logger.error(
-                "Matrix sink '%s' failed to send message to room '%s': %s",
-                self.sink_id,
-                room_id,
-                exc,
-            )
-            return False
+            err_msg = f"Matrix sink '{self.sink_id}' failed to send message to room '{room_id}': {exc}"
+            logger.error(err_msg)
+            return (False, err_msg)

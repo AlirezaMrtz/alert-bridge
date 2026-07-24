@@ -12,9 +12,9 @@ class BaseSink(ABC):
         self.config = config
 
     @abstractmethod
-    async def send(self, message: str) -> bool:
+    async def send(self, message: str) -> tuple[bool, str | None]:
         """Sends a rendered text message to the configured sink.
 
-        Must return True on success, False on failure, and catch all exceptions.
+        Must return (True, None) on success, (False, <reason>) on failure, and catch all exceptions.
         """
         pass

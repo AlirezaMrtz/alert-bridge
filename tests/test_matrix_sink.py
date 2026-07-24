@@ -20,8 +20,9 @@ async def test_matrix_sink_success():
         url=re.compile(r"https://matrix\.example\.com/_matrix/client/v3/rooms/.*")
     ).mock(return_value=httpx.Response(200, json={"event_id": "$12345"}))
 
-    success = await sink.send("Hello World!")
+    success, error = await sink.send("Hello World!")
     assert success is True
+    assert error is None
     assert route.called
     
     request = route.calls.last.request
@@ -46,8 +47,10 @@ async def test_matrix_sink_timeout(caplog):
         url=re.compile(r"https://matrix\.example\.com/_matrix/client/v3/rooms/.*")
     ).mock(side_effect=httpx.TimeoutException("Connection timed out"))
 
-    success = await sink.send("Hello World!")
+    success, error = await sink.send("Hello World!")
     assert success is False
+    assert error is not None
+    assert "Connection timed out" in error
     assert any("failed to send" in record.message for record in caplog.records)
 
 
@@ -65,8 +68,10 @@ async def test_matrix_sink_non_2xx(caplog):
         url=re.compile(r"https://matrix\.example\.com/_matrix/client/v3/rooms/.*")
     ).mock(return_value=httpx.Response(403, text="Forbidden"))
 
-    success = await sink.send("Hello World!")
+    success, error = await sink.send("Hello World!")
     assert success is False
+    assert error is not None
+    assert "403 Forbidden" in error
     assert any("failed to send" in record.message for record in caplog.records)
 
 
@@ -80,7 +85,8 @@ async def test_matrix_sink_missing_homeserver_url_fails(caplog):
     }
     sink = MatrixSink(sink_id="test-matrix", config=sink_config)
 
-    success = await sink.send("Hello World!")
+    success, error = await sink.send("Hello World!")
     assert success is False
+    assert error is not None
+    assert "missing required field 'homeserver_url'" in error
     assert any("missing required field 'homeserver_url'" in record.message for record in caplog.records)
-
