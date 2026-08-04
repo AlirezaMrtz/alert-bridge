@@ -50,8 +50,14 @@ class SinkDispatcher:
         """Dispatches a message concurrently to multiple sinks using asyncio.gather."""
         async def _dispatch_one(sink_id: str) -> SinkResult:
             try:
-                success, error = await self.dispatch(sink_id, message)
+                success, error = await asyncio.wait_for(
+                    self.dispatch(sink_id, message),
+                    timeout=30.0,
+                )
                 return SinkResult(sink_id=sink_id, success=success, error=error)
+            except TimeoutError:
+                logger.error("Dispatch timed out for sink '%s'", sink_id)
+                return SinkResult(sink_id=sink_id, success=False, error="Dispatch timed out")
             except Exception as exc:
                 logger.error("Unhandled exception dispatching to sink '%s': %s", sink_id, exc)
                 return SinkResult(sink_id=sink_id, success=False, error=str(exc))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Any
+from urllib.parse import quote_plus
 
 import httpx
 
@@ -33,8 +34,9 @@ class MatrixSink(BaseSink):
             logger.error(err_msg)
             return (False, err_msg)
 
+        encoded_room_id = quote_plus(str(room_id), safe="!:")
         txn_id = uuid.uuid4().hex
-        url = f"{homeserver.rstrip('/')}/_matrix/client/v3/rooms/{room_id}/send/m.room.message/{txn_id}"
+        url = f"{homeserver.rstrip('/')}/_matrix/client/v3/rooms/{encoded_room_id}/send/m.room.message/{txn_id}"
 
         headers = {
             "Authorization": f"Bearer {access_token}",

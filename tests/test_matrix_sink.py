@@ -35,6 +35,31 @@ async def test_matrix_sink_success():
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_matrix_sink_url_encoding_special_chars():
+    sink_config = {
+        "room_id": "!room:server?token=LEAK",
+        "access_token": "secret-token",
+        "homeserver_url": "https://matrix.example.com",
+    }
+    sink = MatrixSink(sink_id="test-matrix-special", config=sink_config)
+
+    route = respx.put(
+        url=re.compile(r"https://matrix\.example\.com/_matrix/client/v3/rooms/.*")
+    ).mock(return_value=httpx.Response(200, json={"event_id": "$12345"}))
+
+    success, error = await sink.send("Hello Special")
+    assert success is True
+    assert error is None
+    assert route.called
+
+    request = route.calls.last.request
+    request_url_str = str(request.url)
+    assert "!room:server%3Ftoken%3DLEAK" in request_url_str
+    assert "?token=LEAK" not in request_url_str
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_matrix_sink_timeout(caplog):
     sink_config = {
         "room_id": "!abc123:matrix.example.com",

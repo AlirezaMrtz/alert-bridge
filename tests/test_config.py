@@ -59,3 +59,9 @@ def test_matrix_sink_missing_homeserver_url_raises(monkeypatch):
 def test_invalid_sink_type_raises():
     with pytest.raises(ConfigError, match="validation failed"):
         load_config(FIXTURES / "invalid_sink_type.yaml")
+
+
+def test_empty_forward_to_raises(monkeypatch):
+    monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(FIXTURES / "empty_forward_to.yaml")

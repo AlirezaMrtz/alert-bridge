@@ -36,7 +36,7 @@ class RouteConfig(BaseModel):
     id: str
     secret_token: SecretStr
     template_ref: str
-    forward_to: list[str]
+    forward_to: list[str] = Field(..., min_length=1)
 
 
 class BridgeConfig(BaseModel):

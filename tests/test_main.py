@@ -41,10 +41,11 @@ def test_alert_ingress_authorized_header(client, mock_dispatch_many):
     mock_dispatch_many.assert_called_once_with(["matrix-ops"], "**Alert**: Database backup completed successfully")
 
 
-def test_alert_ingress_authorized_query_param(client, mock_dispatch_many):
+def test_alert_ingress_query_params_passed(client, mock_dispatch_many):
     payload = {"message": "Service degraded"}
     response = client.post(
-        "/alerts/prometheus-in?token=supersecrettoken123",
+        "/alerts/prometheus-in?env=production",
+        headers={"X-Secret-Token": "supersecrettoken123"},
         json=payload,
     )
     assert response.status_code == 202
@@ -53,6 +54,28 @@ def test_alert_ingress_authorized_query_param(client, mock_dispatch_many):
     assert data["route"] == "prometheus-in"
     assert data["scheduled_sinks"] == ["matrix-ops"]
     mock_dispatch_many.assert_called_once_with(["matrix-ops"], "**Alert**: Service degraded")
+
+
+def test_token_query_param_scrubbed_from_template_context(client, mock_dispatch_many):
+    payload = {"message": "Service degraded"}
+    response = client.post(
+        "/alerts/prometheus-in?token=secret123&env=prod",
+        headers={"X-Secret-Token": "supersecrettoken123"},
+        json=payload,
+    )
+    assert response.status_code == 202
+    data = response.json()
+    assert data["status"] == "accepted"
+    mock_dispatch_many.assert_called_once_with(["matrix-ops"], "**Alert**: Service degraded")
+
+
+def test_alert_ingress_query_token_rejected(client):
+    response = client.post(
+        "/alerts/prometheus-in?token=supersecrettoken123",
+        json={"message": "Query token attempt"},
+    )
+    assert response.status_code == 401
+    assert "Invalid or missing secret token" in response.json()["detail"]
 
 
 def test_alert_ingress_unauthorized(client):
