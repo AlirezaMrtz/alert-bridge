@@ -71,7 +71,12 @@ async def handle_alert(
     template = config.template_by_id(route.template_ref)
     template_body = template.body if template else "{{ payload | tojson }}"
     
-    rendered_message = await engine.render(template_body, payload, query_params)
+    success, rendered_message = await engine.render(template_body, payload, query_params)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=rendered_message,
+        )
 
     # 5. Schedule background dispatch to sinks
     dispatcher: SinkDispatcher = app.state.dispatcher

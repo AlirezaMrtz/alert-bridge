@@ -32,8 +32,13 @@ class TemplateEngine:
             return urlencode(value)
         return quote_plus(str(value))
 
-    async def render(self, template_body: str, payload: dict[str, Any], query_params: dict[str, str]) -> str:
-        """Compiles a template string against a wrapped source context safely and asynchronously."""
+    async def render(
+        self, template_body: str, payload: dict[str, Any], query_params: dict[str, str]
+    ) -> tuple[bool, str]:
+        """Compiles a template string against a wrapped source context safely and asynchronously.
+
+        Returns (True, rendered_message) on success, or (False, error_message) on failure.
+        """
         try:
             template = self._env.from_string(template_body)
             context = {
@@ -44,10 +49,12 @@ class TemplateEngine:
                 asyncio.to_thread(template.render, context),
                 timeout=0.5,
             )
-            return rendered.strip()
+            return (True, rendered.strip())
         except TimeoutError:
-            logger.error("Template rendering timed out (>0.5s)")
-            return "⚠️ [Template Error] Alert suppressed"
+            err_msg = "Template rendering timed out (>0.5s)"
+            logger.error(err_msg)
+            return (False, err_msg)
         except Exception as exc:
-            logger.error("Template rendering failed: %s", exc)
-            return "⚠️ [Template Error] Alert suppressed"
+            err_msg = f"Template rendering failed: {exc}"
+            logger.error(err_msg)
+            return (False, err_msg)

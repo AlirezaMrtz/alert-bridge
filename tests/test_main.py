@@ -75,6 +75,20 @@ def test_token_query_param_scrubbed_from_template_context(client, mock_dispatch_
     mock_dispatch_many.assert_called_once_with(["matrix-ops"], "**Alert**: Service degraded")
 
 
+def test_alert_ingress_render_failure_returns_500_and_does_not_dispatch(client, mock_dispatch_many, monkeypatch):
+    mock_render = AsyncMock(return_value=(False, "Template rendering failed: simulation"))
+    monkeypatch.setattr("app.engine.TemplateEngine.render", mock_render)
+
+    response = client.post(
+        "/alerts/prometheus-in",
+        headers={"X-Secret-Token": "supersecrettoken123"},
+        json={"message": "Failure payload"},
+    )
+    assert response.status_code == 500
+    assert "Template rendering failed: simulation" in response.json()["detail"]
+    mock_dispatch_many.assert_not_called()
+
+
 def test_alert_ingress_query_token_rejected(client):
     response = client.post(
         "/alerts/prometheus-in?token=supersecrettoken123",
