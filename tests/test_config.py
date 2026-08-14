@@ -1,8 +1,16 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from app.config import ConfigError, load_config
+from app.config import (
+    BridgeConfig,
+    ConfigError,
+    RouteConfig,
+    SinkConfig,
+    TemplateConfig,
+    load_config,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -14,7 +22,7 @@ def test_valid_config_loads(monkeypatch):
     assert config.api_version == "v1alpha1"
     route = config.route_by_id("prometheus-in")
     assert route is not None
-    assert route.forward_to == ["matrix-ops"]
+    assert route.forward_to == ("matrix-ops",)
     assert str(route.secret_token) == "**********"
     assert route.secret_token.get_secret_value() == "supersecrettoken123"
 
@@ -81,3 +89,192 @@ def test_webhook_sink_missing_url_raises():
 def test_webhook_sink_invalid_method_raises():
     with pytest.raises(ConfigError, match="invalid HTTP method"):
         load_config(FIXTURES / "webhook_invalid_method.yaml")
+
+
+def test_duplicate_sink_ids_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {"id": "dup-sink", "type": "webhook", "config": {"url": "https://a.example.com"}},
+            {"id": "dup-sink", "type": "webhook", "config": {"url": "https://b.example.com"}},
+        ],
+        "templates": [
+            {"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"}
+        ],
+        "routes": [
+            {"id": "r1", "secret_token": "token1", "template_ref": "t1", "forward_to": ["dup-sink"]}
+        ],
+    }
+    with pytest.raises(ValidationError, match="Duplicate sink ID detected: 'dup-sink'"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_duplicate_template_ids_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {"id": "s1", "type": "webhook", "config": {"url": "https://a.example.com"}},
+        ],
+        "templates": [
+            {"id": "dup-tmpl", "engine": "jinja2", "format": "markdown", "body": "test 1"},
+            {"id": "dup-tmpl", "engine": "jinja2", "format": "markdown", "body": "test 2"},
+        ],
+        "routes": [
+            {"id": "r1", "secret_token": "token1", "template_ref": "dup-tmpl", "forward_to": ["s1"]}
+        ],
+    }
+    with pytest.raises(ValidationError, match="Duplicate template ID detected: 'dup-tmpl'"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_duplicate_route_ids_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {"id": "s1", "type": "webhook", "config": {"url": "https://a.example.com"}},
+        ],
+        "templates": [
+            {"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"},
+        ],
+        "routes": [
+            {"id": "dup-route", "secret_token": "token1", "template_ref": "t1", "forward_to": ["s1"]},
+            {"id": "dup-route", "secret_token": "token2", "template_ref": "t1", "forward_to": ["s1"]},
+        ],
+    }
+    with pytest.raises(ValidationError, match="Duplicate route ID detected: 'dup-route'"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_matrix_sink_missing_room_id_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {
+                "id": "matrix-sink",
+                "type": "matrix",
+                "config": {
+                    "access_token": "tok",
+                    "homeserver_url": "https://matrix.org",
+                },
+            }
+        ],
+        "templates": [{"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"}],
+        "routes": [{"id": "r1", "secret_token": "tok", "template_ref": "t1", "forward_to": ["matrix-sink"]}],
+    }
+    with pytest.raises(ValidationError, match="missing required field 'room_id'"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_matrix_sink_missing_access_token_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {
+                "id": "matrix-sink",
+                "type": "matrix",
+                "config": {
+                    "room_id": "!room:matrix.org",
+                    "homeserver_url": "https://matrix.org",
+                },
+            }
+        ],
+        "templates": [{"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"}],
+        "routes": [{"id": "r1", "secret_token": "tok", "template_ref": "t1", "forward_to": ["matrix-sink"]}],
+    }
+    with pytest.raises(ValidationError, match="missing required field 'access_token'"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_matrix_sink_invalid_homeserver_url_path_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {
+                "id": "matrix-sink",
+                "type": "matrix",
+                "config": {
+                    "room_id": "!room:matrix.org",
+                    "access_token": "tok",
+                    "homeserver_url": "https://matrix.org/extra/path",
+                },
+            }
+        ],
+        "templates": [{"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"}],
+        "routes": [{"id": "r1", "secret_token": "tok", "template_ref": "t1", "forward_to": ["matrix-sink"]}],
+    }
+    with pytest.raises(ValidationError, match="Path must be empty"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_matrix_sink_homeserver_url_with_query_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {
+                "id": "matrix-sink",
+                "type": "matrix",
+                "config": {
+                    "room_id": "!room:matrix.org",
+                    "access_token": "tok",
+                    "homeserver_url": "https://matrix.org?token=leak",
+                },
+            }
+        ],
+        "templates": [{"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"}],
+        "routes": [{"id": "r1", "secret_token": "tok", "template_ref": "t1", "forward_to": ["matrix-sink"]}],
+    }
+    with pytest.raises(ValidationError, match="Query parameters and URL fragments are not allowed"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_empty_route_secret_token_raises():
+    with pytest.raises(ValidationError, match="secret_token cannot be empty"):
+        RouteConfig(
+            id="r1",
+            secret_token="",
+            template_ref="t1",
+            forward_to=["s1"],
+        )
+
+
+def test_config_models_are_frozen():
+    sink = SinkConfig(id="s1", type="webhook", config={"url": "https://example.com"})
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        sink.id = "s2"
+
+    route = RouteConfig(id="r1", secret_token="tok", template_ref="t1", forward_to=["s1"])
+    with pytest.raises(ValidationError, match="Instance is frozen"):
+        route.template_ref = "t2"
+
+
+def test_forward_to_is_immutable_tuple(monkeypatch):
+    monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
+    config = load_config(FIXTURES / "valid_config.yaml")
+    route = config.routes[0]
+    assert isinstance(route.forward_to, tuple)
+    assert not hasattr(route.forward_to, "append")
+
+
+def test_webhook_sink_lowercase_method_raises():
+    raw_data = {
+        "apiVersion": "v1alpha1",
+        "sinks": [
+            {
+                "id": "webhook-sink",
+                "type": "webhook",
+                "config": {
+                    "url": "https://hooks.example.com/alerts",
+                    "method": "post",  # lowercase intentionally
+                },
+            }
+        ],
+        "templates": [{"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"}],
+        "routes": [{"id": "r1", "secret_token": "tok", "template_ref": "t1", "forward_to": ["webhook-sink"]}],
+    }
+    with pytest.raises(ValidationError, match="invalid HTTP method 'post'"):
+        BridgeConfig.model_validate(raw_data)
+
+
+def test_whitespace_only_id_raises():
+    with pytest.raises(ValidationError, match="String should have at least 1 character"):
+        SinkConfig(id="   ", type="webhook", config={"url": "https://example.com"})
