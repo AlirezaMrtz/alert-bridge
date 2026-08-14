@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Any
-from urllib.parse import quote_plus
+from urllib.parse import quote
 
 import httpx
 
@@ -34,7 +34,7 @@ class MatrixSink(BaseSink):
             logger.error(err_msg)
             return (False, err_msg)
 
-        encoded_room_id = quote_plus(str(room_id), safe="!:")
+        encoded_room_id = quote(str(room_id), safe="!:")
         txn_id = uuid.uuid4().hex
         url = f"{homeserver.rstrip('/')}/_matrix/client/v3/rooms/{encoded_room_id}/send/m.room.message/{txn_id}"
 
@@ -48,10 +48,9 @@ class MatrixSink(BaseSink):
         }
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.put(url, headers=headers, json=json_data, timeout=10.0)
-                response.raise_for_status()
-                return (True, None)
+            response = await self.client.put(url, headers=headers, json=json_data, timeout=10.0)
+            response.raise_for_status()
+            return (True, None)
         except (httpx.TimeoutException, httpx.HTTPError) as exc:
             err_msg = f"Matrix sink '{self.sink_id}' failed to send message to room '{room_id}': {exc}"
             logger.error(err_msg)

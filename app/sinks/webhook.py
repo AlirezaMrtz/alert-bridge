@@ -30,16 +30,15 @@ class WebhookSink(BaseSink):
         payload[text_field] = message
 
         try:
-            async with httpx.AsyncClient() as client:
-                response = await client.request(
-                    method=method,
-                    url=url,
-                    headers=headers,
-                    json=payload,
-                    timeout=10.0,
-                )
-                response.raise_for_status()
-                return (True, None)
+            response = await self.client.request(
+                method=method,
+                url=url,
+                headers=headers,
+                json=payload,
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return (True, None)
         except (httpx.TimeoutException, httpx.HTTPError) as exc:
             err_msg = f"Webhook sink '{self.sink_id}' failed to send message to URL '{url}': {exc}"
             logger.error(err_msg)

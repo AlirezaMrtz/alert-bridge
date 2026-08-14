@@ -4,8 +4,8 @@ import hmac
 import os
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, Header, HTTPException, Request, status
-
 
 from app.config import load_config, BridgeConfig
 from app.engine import TemplateEngine
@@ -19,10 +19,15 @@ CONFIG_PATH = os.getenv("ALERT_BRIDGE_CONFIG", "config.yaml")
 async def lifespan(app: FastAPI):
     # Load configuration on startup (crashes if config is missing/invalid)
     config = load_config(CONFIG_PATH)
+    http_client = httpx.AsyncClient(timeout=10.0)
     app.state.config = config
     app.state.engine = TemplateEngine()
-    app.state.dispatcher = SinkDispatcher(config.sinks)
-    yield
+    app.state.http_client = http_client
+    app.state.dispatcher = SinkDispatcher(config.sinks, http_client)
+    try:
+        yield
+    finally:
+        await http_client.aclose()
 
 
 app = FastAPI(

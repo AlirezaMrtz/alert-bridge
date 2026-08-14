@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import httpx
 from pydantic import BaseModel
 
 from app.config import SinkConfig
@@ -25,8 +26,9 @@ class SinkResult(BaseModel):
 class SinkDispatcher:
     """Dispatches rendered alerts to their configured destination sinks."""
 
-    def __init__(self, sinks: list[SinkConfig]) -> None:
+    def __init__(self, sinks: list[SinkConfig], client: httpx.AsyncClient) -> None:
         self.sinks = {s.id: s for s in sinks}
+        self.client = client
 
     async def dispatch(self, sink_id: str, message: str) -> tuple[bool, str | None]:
         """Dispatches a message to a specific sink by instantiating its concrete handler."""
@@ -43,7 +45,7 @@ class SinkDispatcher:
             return (False, err_msg)
 
         logger.info("Dispatching alert to sink '%s' (type: %s): %r", sink_id, sink_config.type, message)
-        sink_instance = sink_class(sink_config.id, sink_config.config)
+        sink_instance = sink_class(sink_config.id, sink_config.config, self.client)
         return await sink_instance.send(message)
 
     async def dispatch_many(self, sink_ids: list[str], message: str) -> list[SinkResult]:

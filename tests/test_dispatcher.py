@@ -8,7 +8,7 @@ from app.dispatcher import SinkDispatcher, SinkResult
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_dispatch_many_detailed_error_propagation():
+async def test_dispatch_many_detailed_error_propagation(http_client):
     sinks = [
         SinkConfig(
             id="matrix-sink",
@@ -27,7 +27,7 @@ async def test_dispatch_many_detailed_error_propagation():
             },
         ),
     ]
-    dispatcher = SinkDispatcher(sinks)
+    dispatcher = SinkDispatcher(sinks, http_client)
 
     # Mock matrix sink to fail with 500 error
     respx.put(re.compile(r"https://matrix\.example\.com/.*")).mock(

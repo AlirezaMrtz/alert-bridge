@@ -7,11 +7,11 @@ from app.sinks.webhook import WebhookSink
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_webhook_sink_default_text_field():
+async def test_webhook_sink_default_text_field(http_client):
     sink_config = {
         "url": "https://hooks.example.com/services/123",
     }
-    sink = WebhookSink(sink_id="test-webhook", config=sink_config)
+    sink = WebhookSink(sink_id="test-webhook", config=sink_config, client=http_client)
 
     route = respx.post("https://hooks.example.com/services/123").mock(
         return_value=httpx.Response(200, json={"status": "ok"})
@@ -30,12 +30,12 @@ async def test_webhook_sink_default_text_field():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_webhook_sink_custom_text_field():
+async def test_webhook_sink_custom_text_field(http_client):
     sink_config = {
         "url": "https://discord.example.com/api/webhooks/123",
         "text_field": "content",
     }
-    sink = WebhookSink(sink_id="discord-webhook", config=sink_config)
+    sink = WebhookSink(sink_id="discord-webhook", config=sink_config, client=http_client)
 
     route = respx.post("https://discord.example.com/api/webhooks/123").mock(
         return_value=httpx.Response(204)
@@ -52,7 +52,7 @@ async def test_webhook_sink_custom_text_field():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_webhook_sink_extra_fields_merged():
+async def test_webhook_sink_extra_fields_merged(http_client):
     sink_config = {
         "url": "https://hooks.example.com/custom",
         "text_field": "message",
@@ -62,7 +62,7 @@ async def test_webhook_sink_extra_fields_merged():
             "severity": "critical",
         },
     }
-    sink = WebhookSink(sink_id="custom-webhook", config=sink_config)
+    sink = WebhookSink(sink_id="custom-webhook", config=sink_config, client=http_client)
 
     route = respx.post("https://hooks.example.com/custom").mock(
         return_value=httpx.Response(200)
@@ -84,13 +84,13 @@ async def test_webhook_sink_extra_fields_merged():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_webhook_sink_custom_method_and_headers():
+async def test_webhook_sink_custom_method_and_headers(http_client):
     sink_config = {
         "url": "https://api.example.com/alerts",
         "method": "PUT",
         "headers": {"Authorization": "Bearer token123", "X-Custom-Header": "value"},
     }
-    sink = WebhookSink(sink_id="put-webhook", config=sink_config)
+    sink = WebhookSink(sink_id="put-webhook", config=sink_config, client=http_client)
 
     route = respx.put("https://api.example.com/alerts").mock(
         return_value=httpx.Response(200)
@@ -109,11 +109,11 @@ async def test_webhook_sink_custom_method_and_headers():
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_webhook_sink_timeout(caplog):
+async def test_webhook_sink_timeout(http_client, caplog):
     sink_config = {
         "url": "https://hooks.example.com/timeout",
     }
-    sink = WebhookSink(sink_id="timeout-webhook", config=sink_config)
+    sink = WebhookSink(sink_id="timeout-webhook", config=sink_config, client=http_client)
 
     respx.post("https://hooks.example.com/timeout").mock(
         side_effect=httpx.TimeoutException("Connection timed out")
@@ -128,11 +128,11 @@ async def test_webhook_sink_timeout(caplog):
 
 @pytest.mark.asyncio
 @respx.mock
-async def test_webhook_sink_5xx_error(caplog):
+async def test_webhook_sink_5xx_error(http_client, caplog):
     sink_config = {
         "url": "https://hooks.example.com/500",
     }
-    sink = WebhookSink(sink_id="error-webhook", config=sink_config)
+    sink = WebhookSink(sink_id="error-webhook", config=sink_config, client=http_client)
 
     respx.post("https://hooks.example.com/500").mock(
         return_value=httpx.Response(500, text="Internal Server Error")
@@ -146,8 +146,8 @@ async def test_webhook_sink_5xx_error(caplog):
 
 
 @pytest.mark.asyncio
-async def test_webhook_sink_missing_url(caplog):
-    sink = WebhookSink(sink_id="missing-url-webhook", config={})
+async def test_webhook_sink_missing_url(http_client, caplog):
+    sink = WebhookSink(sink_id="missing-url-webhook", config={}, client=http_client)
     success, error = await sink.send("Alert Test")
     assert success is False
     assert error is not None
