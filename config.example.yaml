@@ -1,0 +1,34 @@
+apiVersion: v1alpha1
+
+sinks:
+  - id: matrix-ops
+    type: matrix
+    config:
+      room_id: "!ops-alerts:matrix.example.com"
+      access_token: "${MATRIX_TOKEN}"
+      homeserver_url: "https://matrix.example.com"
+
+  - id: slack-devs
+    type: webhook
+    config:
+      url: "https://hooks.slack.com/services/T00000000/B00000000/XXXXXXXXXXXXXXXXXXXXXXXX"
+      method: "POST"
+      text_field: "text"
+      extra_fields:
+        username: "AlertBridge"
+
+templates:
+  - id: alert-basic
+    engine: jinja2
+    format: markdown
+    body: |
+      🚨 **Alert**: {{ payload.message }}
+      *Environment*: {{ params.env | default('prod') }}
+
+routes:
+  - id: prometheus-in
+    secret_token: "${PROMETHEUS_SECRET_TOKEN}"
+    template_ref: alert-basic
+    forward_to:
+      - matrix-ops
+      - slack-devs
