@@ -26,6 +26,12 @@ def client(monkeypatch, mock_dispatch_many):
         yield client
 
 
+def test_health_check(client):
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+
+
 def test_alert_ingress_authorized_header(client, mock_dispatch_many):
     payload = {"message": "Database backup completed successfully"}
     response = client.post(

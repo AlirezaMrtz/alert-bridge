@@ -2,32 +2,46 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, master ]
+    branches: [ main ]
 
 jobs:
-  test:
-    name: Run Tests
+  test-and-build:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Code
+      - name: Checkout repository
         uses: actions/checkout@v4
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v5
-        with:
-          enable-cache: true
-          version: "latest"
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version-file: ".python-version"
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --frozen --all-groups
+        run: uv sync --all-groups
 
-      - name: Run Tests
-        run: uv run pytest
+      - name: Run test suite
+        run: uv run pytest -v
+
+      - name: Build Docker image (Sanity Check)
+        run: docker build -t alert-bridge:test .
+
+      - name: Smoke Test Container
+        run: |
+          docker run -d -p 8000:8000 --name alert-bridge-test \
+            -v "${{ github.workspace }}/tests/fixtures/valid_config.yaml:/app/config.yaml:ro" \
+            -e ALERT_BRIDGE_CONFIG=/app/config.yaml \
+            -e MATRIX_TOKEN=ci-matrix-token \
+            alert-bridge:test
+          for i in $(seq 1 10); do
+            curl -sf http://localhost:8000/health && break || sleep 1
+          done
+          curl -f http://localhost:8000/health
+          docker stop alert-bridge-test && docker rm alert-bridge-test

@@ -32,6 +32,11 @@ app = FastAPI(
 )
 
 
+@app.get("/health", status_code=status.HTTP_200_OK)
+async def health_check():
+    return {"status": "ok"}
+
+
 @app.post("/alerts/{route_id}", status_code=status.HTTP_202_ACCEPTED)
 async def handle_alert(
     route_id: str,
