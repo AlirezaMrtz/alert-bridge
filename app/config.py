@@ -54,6 +54,15 @@ class BridgeConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def validate_route_sink_refs(self) -> BridgeConfig:
+        sink_ids = {s.id for s in self.sinks}
+        for route in self.routes:
+            for sink_id in route.forward_to:
+                if sink_id not in sink_ids:
+                    raise ValueError(f"Route '{route.id}' references nonexistent sink '{sink_id}'")
+        return self
+
+    @model_validator(mode="after")
     def validate_matrix_sinks(self) -> BridgeConfig:
         """Every matrix sink must declare 'homeserver_url' in its config.
 
@@ -69,6 +78,28 @@ class BridgeConfig(BaseModel):
                         f"URL explicitly (e.g. 'https://matrix.example.com'). "
                         f"It cannot be inferred from the room ID reliably."
                     )
+        return self
+
+    @model_validator(mode="after")
+    def validate_webhook_sinks(self) -> BridgeConfig:
+        """Every webhook sink must contain a valid URL (http:// or https://)
+        and an accepted HTTP method if specified.
+        """
+        allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        for sink in self.sinks:
+            if sink.type == "webhook":
+                url = sink.config.get("url")
+                if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://")):
+                    raise ValueError(
+                        f"Sink '{sink.id}' (type: webhook) is missing a valid 'url' starting with 'http://' or 'https://'"
+                    )
+                method = sink.config.get("method")
+                if method is not None:
+                    if not isinstance(method, str) or method.upper() not in allowed_methods:
+                        raise ValueError(
+                            f"Sink '{sink.id}' (type: webhook) has invalid HTTP method '{method}'. "
+                            f"Allowed methods: {', '.join(sorted(allowed_methods))}"
+                        )
         return self
 
 

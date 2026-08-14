@@ -1,0 +1,19 @@
+apiVersion: v1alpha1
+sinks:
+  - id: webhook-alerts
+    type: webhook
+    config:
+      url: "https://hooks.example.com/alerts"
+      method: "INVALID_METHOD"
+templates:
+  - id: alert-basic
+    engine: jinja2
+    format: markdown
+    body: |
+      **Alert**: {{ payload.message }}
+routes:
+  - id: prometheus-in
+    secret_token: "supersecrettoken123"
+    template_ref: alert-basic
+    forward_to:
+      - webhook-alerts

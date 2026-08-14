@@ -65,3 +65,19 @@ def test_empty_forward_to_raises(monkeypatch):
     monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
     with pytest.raises(ConfigError, match="validation failed"):
         load_config(FIXTURES / "empty_forward_to.yaml")
+
+
+def test_nonexistent_forward_to_sink_raises(monkeypatch):
+    monkeypatch.setenv("MATRIX_TOKEN", "real-token-value")
+    with pytest.raises(ConfigError, match="references nonexistent sink"):
+        load_config(FIXTURES / "nonexistent_forward_to_sink.yaml")
+
+
+def test_webhook_sink_missing_url_raises():
+    with pytest.raises(ConfigError, match="missing a valid 'url'"):
+        load_config(FIXTURES / "webhook_missing_url.yaml")
+
+
+def test_webhook_sink_invalid_method_raises():
+    with pytest.raises(ConfigError, match="invalid HTTP method"):
+        load_config(FIXTURES / "webhook_invalid_method.yaml")
