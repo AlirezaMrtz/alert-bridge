@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
+from typing import Any
+
 import httpx
 from pydantic import BaseModel
 
@@ -26,7 +29,7 @@ class SinkResult(BaseModel):
 class SinkDispatcher:
     """Dispatches rendered alerts to their configured destination sinks."""
 
-    def __init__(self, sinks: list[SinkConfig], client: httpx.AsyncClient) -> None:
+    def __init__(self, sinks: Sequence[SinkConfig], client: httpx.AsyncClient) -> None:
         self.sinks = {s.id: s for s in sinks}
         self.client = client
 
@@ -44,17 +47,18 @@ class SinkDispatcher:
             logger.error(err_msg)
             return (False, err_msg)
 
-        logger.info("Dispatching alert to sink '%s' (type: %s): %r", sink_id, sink_config.type, message)
+        logger.info("Dispatching alert to sink '%s' (type: %s, message_len=%d)", sink_id, sink_config.type, len(message))
+        logger.debug("Rendered message payload for sink '%s': %r", sink_id, message)
         sink_instance = sink_class(sink_config.id, sink_config.config, self.client)
         return await sink_instance.send(message)
 
-    async def dispatch_many(self, sink_ids: list[str], message: str) -> list[SinkResult]:
+    async def dispatch_many(self, sink_ids: Sequence[str], message: str) -> list[SinkResult]:
         """Dispatches a message concurrently to multiple sinks using asyncio.gather."""
         async def _dispatch_one(sink_id: str) -> SinkResult:
             try:
                 success, error = await asyncio.wait_for(
                     self.dispatch(sink_id, message),
-                    timeout=30.0,
+                    timeout=35.0,
                 )
                 return SinkResult(sink_id=sink_id, success=success, error=error)
             except TimeoutError:

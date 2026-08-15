@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import Any
-from urllib.parse import quote_plus, urlencode
+from urllib.parse import quote, urlencode
 
 from jinja2 import ChainableUndefined
 from jinja2.sandbox import SandboxedEnvironment
@@ -27,10 +27,10 @@ class TemplateEngine:
 
     @staticmethod
     def _urlencode_filter(value: Any) -> str:
-        """Safely encodes strings or dictionaries for target URL query strings."""
+        """Safely encodes strings or dictionaries for target URL query strings using RFC 3986 percent-encoding."""
         if isinstance(value, dict):
-            return urlencode(value)
-        return quote_plus(str(value))
+            return urlencode(value, quote_via=quote)
+        return quote(str(value))
 
     async def render(
         self, template_body: str, payload: dict[str, Any], query_params: dict[str, str]

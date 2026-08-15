@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from typing import Any
@@ -10,6 +11,8 @@ import httpx
 from app.sinks.base import BaseSink
 
 logger = logging.getLogger("bridge.sinks.matrix")
+
+MAX_ATTEMPTS = 3
 
 
 class MatrixSink(BaseSink):
@@ -35,6 +38,7 @@ class MatrixSink(BaseSink):
             return (False, err_msg)
 
         encoded_room_id = quote(str(room_id), safe="!:")
+        # Generate txn_id ONCE so retries use the identical idempotency token
         txn_id = uuid.uuid4().hex
         url = f"{homeserver.rstrip('/')}/_matrix/client/v3/rooms/{encoded_room_id}/send/m.room.message/{txn_id}"
 
@@ -47,11 +51,43 @@ class MatrixSink(BaseSink):
             "body": message,
         }
 
-        try:
-            response = await self.client.put(url, headers=headers, json=json_data, timeout=10.0)
-            response.raise_for_status()
-            return (True, None)
-        except (httpx.TimeoutException, httpx.HTTPError) as exc:
-            err_msg = f"Matrix sink '{self.sink_id}' failed to send message to room '{room_id}': {exc}"
-            logger.error(err_msg)
-            return (False, err_msg)
+        for attempt in range(MAX_ATTEMPTS):
+            try:
+                response = await self.client.put(url, headers=headers, json=json_data, timeout=10.0)
+                response.raise_for_status()
+                return (True, None)
+            except httpx.HTTPStatusError as exc:
+                status_code = exc.response.status_code
+                # Fail fast on 4xx client errors (except 429 Too Many Requests) without retrying
+                if 400 <= status_code < 500 and status_code != 429:
+                    err_msg = f"Matrix sink '{self.sink_id}' client error (HTTP {status_code}) sending message to room '{room_id}': {exc}"
+                    logger.error(err_msg)
+                    return (False, err_msg)
+
+                err_msg = f"Matrix sink '{self.sink_id}' HTTP {status_code} error sending message to room '{room_id}': {exc}"
+                if attempt < MAX_ATTEMPTS - 1:
+                    retry_after = exc.response.headers.get("Retry-After")
+                    try:
+                        sleep_time = max(0.0, min(float(retry_after), 2.0)) if retry_after else 0.05 * (2 ** attempt)
+                    except (ValueError, TypeError):
+                        sleep_time = 0.05 * (2 ** attempt)
+                    logger.warning(
+                        "Retrying Matrix sink '%s' (attempt %d/%d) after HTTP %d error: %s (sleeping %.2fs)",
+                        self.sink_id, attempt + 1, MAX_ATTEMPTS, status_code, exc, sleep_time
+                    )
+                    await asyncio.sleep(sleep_time)
+                else:
+                    logger.error(err_msg)
+                    return (False, err_msg)
+            except (httpx.TimeoutException, httpx.HTTPError) as exc:
+                err_msg = f"Matrix sink '{self.sink_id}' network/timeout error sending message to room '{room_id}': {exc}"
+                if attempt < MAX_ATTEMPTS - 1:
+                    sleep_time = 0.05 * (2 ** attempt)
+                    logger.warning(
+                        "Retrying Matrix sink '%s' (attempt %d/%d) after network error: %s (sleeping %.2fs)",
+                        self.sink_id, attempt + 1, MAX_ATTEMPTS, exc, sleep_time
+                    )
+                    await asyncio.sleep(sleep_time)
+                else:
+                    logger.error(err_msg)
+                    return (False, err_msg)

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import httpx
 import pytest
@@ -109,6 +110,108 @@ async def test_webhook_sink_custom_method_and_headers(http_client):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_webhook_sink_retries_on_timeout_and_succeeds(http_client):
+    sink_config = {
+        "url": "https://hooks.example.com/retry-timeout",
+    }
+    sink = WebhookSink(sink_id="timeout-retry-webhook", config=sink_config, client=http_client)
+
+    route = respx.post("https://hooks.example.com/retry-timeout")
+    route.side_effect = [
+        httpx.TimeoutException("Connection timed out"),
+        httpx.Response(200, json={"status": "ok"}),
+    ]
+
+    success, error = await sink.send("Alert Retry")
+    assert success is True
+    assert error is None
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_webhook_sink_retries_on_429_and_succeeds(http_client):
+    sink_config = {
+        "url": "https://hooks.example.com/retry-429",
+    }
+    sink = WebhookSink(sink_id="rate-limit-webhook", config=sink_config, client=http_client)
+
+    route = respx.post("https://hooks.example.com/retry-429")
+    route.side_effect = [
+        httpx.Response(429, headers={"Retry-After": "0.01"}, text="Too Many Requests"),
+        httpx.Response(200, json={"status": "ok"}),
+    ]
+
+    success, error = await sink.send("Alert 429 Retry")
+    assert success is True
+    assert error is None
+    assert route.call_count == 2
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_webhook_sink_retry_after_clamped_to_max(http_client, monkeypatch):
+    sink_config = {
+        "url": "https://hooks.example.com/retry-clamped",
+    }
+    sink = WebhookSink(sink_id="clamped-webhook", config=sink_config, client=http_client)
+
+    route = respx.post("https://hooks.example.com/retry-clamped")
+    route.side_effect = [
+        httpx.Response(429, headers={"Retry-After": "300"}, text="Too Many Requests"),
+        httpx.Response(200, json={"status": "ok"}),
+    ]
+
+    sleep_calls = []
+    async def mock_sleep(duration):
+        sleep_calls.append(duration)
+
+    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
+
+    success, error = await sink.send("Alert Clamped 429")
+    assert success is True
+    assert error is None
+    assert route.call_count == 2
+    assert sleep_calls == [2.0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("header_val", "expected_sleep"),
+    [
+        ("invalid_string", 0.05),
+        ("0", 0.0),
+        ("-10", 0.0),
+    ],
+)
+@respx.mock
+async def test_retry_after_edge_cases(http_client, monkeypatch, header_val, expected_sleep):
+    sink_config = {
+        "url": "https://hooks.example.com/edge-cases",
+    }
+    sink = WebhookSink(sink_id="edge-webhook", config=sink_config, client=http_client)
+
+    route = respx.post("https://hooks.example.com/edge-cases")
+    route.side_effect = [
+        httpx.Response(429, headers={"Retry-After": header_val}, text="Too Many Requests"),
+        httpx.Response(200, json={"status": "ok"}),
+    ]
+
+    sleep_calls = []
+    async def mock_sleep(duration):
+        sleep_calls.append(duration)
+
+    monkeypatch.setattr(asyncio, "sleep", mock_sleep)
+
+    success, error = await sink.send("Alert Edge Case")
+    assert success is True
+    assert error is None
+    assert route.call_count == 2
+    assert sleep_calls == [expected_sleep]
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_webhook_sink_timeout(http_client, caplog):
     sink_config = {
         "url": "https://hooks.example.com/timeout",
@@ -123,7 +226,7 @@ async def test_webhook_sink_timeout(http_client, caplog):
     assert success is False
     assert error is not None
     assert "Connection timed out" in error
-    assert any("failed to send message" in record.message for record in caplog.records)
+    assert any("error" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
@@ -142,7 +245,7 @@ async def test_webhook_sink_5xx_error(http_client, caplog):
     assert success is False
     assert error is not None
     assert "500 Internal Server Error" in error
-    assert any("failed to send message" in record.message for record in caplog.records)
+    assert any("error" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio

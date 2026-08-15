@@ -46,19 +46,20 @@ async def test_urlencode_filter_string():
     
     success, result = await engine.render(template, payload, {})
     assert success is True
-    assert result == "https://logs.internal/?search=connection+reset+by+peer%21"
+    assert result == "https://logs.internal/?search=connection%20reset%20by%20peer%21"
 
 
 @pytest.mark.asyncio
 async def test_urlencode_filter_dict():
     engine = TemplateEngine()
     template = "https://grafana.internal/?{{ payload.args | urlencode }}"
-    payload = {"args": {"app": "auth", "cluster": "eu-central"}}
+    payload = {"args": {"app": "auth service", "cluster": "eu-central"}}
     
     success, result = await engine.render(template, payload, {})
     assert success is True
-    assert "app=auth" in result
+    assert "app=auth%20service" in result
     assert "cluster=eu-central" in result
+    assert "+" not in result
 
 
 @pytest.mark.asyncio
@@ -70,3 +71,19 @@ async def test_template_rendering_error_fallback(caplog):
     assert success is False
     assert "Template rendering failed" in result
     assert any("Template rendering failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_sandboxed_environment_blocks_rce_probes():
+    engine = TemplateEngine()
+    # Unsafe attribute access resolves to empty string without exposing classes
+    success, result = await engine.render("{{ payload.__class__ }}", {}, {})
+    assert result == ""
+    
+    success, result = await engine.render("{{ [].__class__.__base__ }}", {}, {})
+    assert result == ""
+
+    # Invoking unsafe methods/subclasses raises SecurityError caught by render
+    success, result = await engine.render("{{ ''.__class__.__mro__[1].__subclasses__() }}", {}, {})
+    assert success is False
+    assert "access to attribute '__class__'" in result
