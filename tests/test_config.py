@@ -278,3 +278,28 @@ def test_webhook_sink_lowercase_method_raises():
 def test_whitespace_only_id_raises():
     with pytest.raises(ValidationError, match="String should have at least 1 character"):
         SinkConfig(id="   ", type="webhook", config={"url": "https://example.com"})
+
+
+def test_unsupported_template_engine_raises(tmp_path):
+    config_content = """
+apiVersion: v1alpha1
+sinks:
+  - id: s1
+    type: webhook
+    config:
+      url: "https://example.com"
+templates:
+  - id: t1
+    engine: mako
+    format: markdown
+    body: "test"
+routes:
+  - id: r1
+    secret_token: "secret"
+    template_ref: t1
+    forward_to: ["s1"]
+"""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(config_content.strip(), encoding="utf-8")
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(config_file)

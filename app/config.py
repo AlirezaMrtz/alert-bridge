@@ -32,7 +32,7 @@ class TemplateConfig(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     id: str = Field(..., min_length=1)
-    engine: str = Field(..., min_length=1)
+    engine: Literal["jinja2"]
     format: str = Field(..., min_length=1)
     body: str = Field(..., min_length=1)
 

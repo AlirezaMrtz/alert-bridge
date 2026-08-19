@@ -33,7 +33,7 @@ A high-performance, asynchronous microservice built in Python 3.12 and FastAPI f
 2. **Strict Authentication:** The request is authenticated strictly via the `X-Secret-Token` HTTP header using `hmac.compare_digest` to prevent timing attacks.
 3. **Template Rendering:** The payload and URL query parameters are passed to an isolated `SandboxedEnvironment` Jinja2 engine wrapped in `asyncio.wait_for(..., timeout=0.5)` to bound request rendering latency.
 4. **Immediate Acknowledgment (`202 Accepted`):** The ingress controller returns an HTTP `202 Accepted` status immediately, decoupling caller response latency from downstream sink processing. If rendering fails, a `500 Internal Server Error` is returned immediately and background dispatch is aborted.
-5. **Concurrent Background Dispatch:** Delivery tasks execute concurrently via FastAPI `BackgroundTasks` and `asyncio.gather` over a shared connection pool (`httpx.AsyncClient`). Sinks run with fault isolation and a 30-second execution timeout per target.
+5. **Concurrent Background Dispatch:** Delivery tasks execute concurrently via FastAPI `BackgroundTasks` and `asyncio.gather` over a shared connection pool (`httpx.AsyncClient`). Sinks run with fault isolation and a 35-second execution timeout per target.
 
 ---
 
@@ -49,7 +49,8 @@ A high-performance, asynchronous microservice built in Python 3.12 and FastAPI f
 | **URL Path Sanitization** | `quote(str(room_id), safe="!:")` | RFC 3986 path percent-encoding preventing injection in Matrix room IDs. |
 | **Secret Hygiene** | Query parameter `token` stripping & masked log messages | Secret leakage into logs or Jinja2 context variables. |
 | **Connection Pooling & Lifecycle** | Shared `httpx.AsyncClient` in application lifespan | Resource leaks and connection overhead across high-throughput dispatches. |
-| **Fault Isolation** | `asyncio.wait_for(dispatch, timeout=30.0)` + `asyncio.gather` | Single hanging sink blocking delivery to sibling sinks. |
+| **Fault Isolation** | `asyncio.wait_for(dispatch, timeout=35.0)` + `asyncio.gather` | Single hanging sink blocking delivery to sibling sinks. |
+| **Transient Fault & Rate-Limit Resilience** | 3-attempt exponential retry loop with HTTP 429 `Retry-After` clamping ($\le 2.0\text{s}$) | Prevents alert loss on transient 5xx spikes and rate-limit bursts while guaranteeing $\le 35.0\text{s}$ SLA bound. |
 | **Non-Root Container** | Custom `appuser` (UID 10001) in docker runtime stage | Privilege escalation inside container runtime environments. |
 
 ---
