@@ -56,7 +56,7 @@ class RouteConfig(BaseModel):
 class BridgeConfig(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
-    api_version: str = Field(alias="apiVersion")
+    api_version: Literal["v1alpha1"] = Field(alias="apiVersion")
     sinks: list[SinkConfig]
     templates: list[TemplateConfig]
     routes: list[RouteConfig]
