@@ -303,3 +303,74 @@ routes:
     config_file.write_text(config_content.strip(), encoding="utf-8")
     with pytest.raises(ConfigError, match="validation failed"):
         load_config(config_file)
+
+
+def test_invalid_api_version_raises(tmp_path):
+    raw_data = {
+        "apiVersion": "v2",
+        "sinks": [
+            {"id": "s1", "type": "webhook", "config": {"url": "https://example.com"}},
+        ],
+        "templates": [
+            {"id": "t1", "engine": "jinja2", "format": "markdown", "body": "test"},
+        ],
+        "routes": [
+            {"id": "r1", "secret_token": "token1", "template_ref": "t1", "forward_to": ["s1"]},
+        ],
+    }
+    with pytest.raises(ValidationError):
+        BridgeConfig.model_validate(raw_data)
+
+    config_content = """
+apiVersion: v2
+sinks:
+  - id: s1
+    type: webhook
+    config:
+      url: "https://example.com"
+templates:
+  - id: t1
+    engine: jinja2
+    format: markdown
+    body: "test"
+routes:
+  - id: r1
+    secret_token: "secret"
+    template_ref: t1
+    forward_to: ["s1"]
+"""
+    config_file = tmp_path / "config.yaml"
+    config_file.write_text(config_content.strip(), encoding="utf-8")
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_config(config_file)
+
+
+def test_invalid_template_format_raises():
+    with pytest.raises(ValidationError):
+        TemplateConfig(
+            id="t1",
+            engine="jinja2",
+            format="xml",  # type: ignore[arg-type]
+            body="test",
+        )
+
+
+def test_sink_config_dict_strings_are_stripped():
+    sink = SinkConfig(
+        id="matrix-sink",
+        type="matrix",
+        config={
+            "room_id": "  !room:matrix.org  ",
+            "access_token": "  secret_token  ",
+            "homeserver_url": "  https://matrix.org  ",
+            "headers": {
+                "Authorization": "  Bearer token123  ",
+                "X-Custom": "  custom-value  ",
+            },
+        },
+    )
+    assert sink.config["room_id"] == "!room:matrix.org"
+    assert sink.config["access_token"] == "secret_token"
+    assert sink.config["homeserver_url"] == "https://matrix.org"
+    assert sink.config["headers"]["Authorization"] == "Bearer token123"
+    assert sink.config["headers"]["X-Custom"] == "custom-value"

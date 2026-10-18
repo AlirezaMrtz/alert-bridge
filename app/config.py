@@ -27,13 +27,37 @@ class SinkConfig(BaseModel):
     type: Literal["matrix", "webhook"]
     config: dict[str, Any] = Field(default_factory=dict)
 
+    @field_validator("config")
+    @classmethod
+    def strip_config_strings(cls, v: dict[str, Any]) -> dict[str, Any]:
+        def _strip(val: Any) -> Any:
+            if isinstance(val, str):
+                return val.strip()
+            if isinstance(val, dict):
+                for k, sub_val in list(val.items()):
+                    val[k] = _strip(sub_val)
+                return val
+            if isinstance(val, list):
+                for i, item in enumerate(val):
+                    val[i] = _strip(item)
+                return val
+            if isinstance(val, tuple):
+                return tuple(_strip(item) for item in val)
+            if isinstance(val, set):
+                return {_strip(item) for item in val}
+            return val
+
+        if isinstance(v, dict):
+            return _strip(v)
+        return v
+
 
 class TemplateConfig(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
     id: str = Field(..., min_length=1)
     engine: Literal["jinja2"]
-    format: str = Field(..., min_length=1)
+    format: Literal["text", "markdown", "html"]
     body: str = Field(..., min_length=1)
 
 
