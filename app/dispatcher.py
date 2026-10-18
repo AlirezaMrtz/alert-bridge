@@ -29,9 +29,10 @@ class SinkResult(BaseModel):
 class SinkDispatcher:
     """Dispatches rendered alerts to their configured destination sinks."""
 
-    def __init__(self, sinks: Sequence[SinkConfig], client: httpx.AsyncClient) -> None:
+    def __init__(self, sinks: Sequence[SinkConfig], client: httpx.AsyncClient, max_concurrency: int = 50) -> None:
         self.sinks = {s.id: s for s in sinks}
         self.client = client
+        self._semaphore = asyncio.Semaphore(max_concurrency)
 
     async def dispatch(self, sink_id: str, message: str, *, fmt: str = "text") -> tuple[bool, str | None]:
         """Dispatches a message to a specific sink by instantiating its concrete handler."""
@@ -50,7 +51,8 @@ class SinkDispatcher:
         logger.info("Dispatching alert to sink '%s' (type: %s, message_len=%d)", sink_id, sink_config.type, len(message))
         logger.debug("Rendered message payload for sink '%s': %r", sink_id, message)
         sink_instance = sink_class(sink_config.id, sink_config.config, self.client)
-        return await sink_instance.send(message, fmt=fmt)
+        async with self._semaphore:
+            return await sink_instance.send(message, fmt=fmt)
 
     async def dispatch_many(self, sink_ids: Sequence[str], message: str, *, fmt: str = "text") -> list[SinkResult]:
         """Dispatches a message concurrently to multiple sinks using asyncio.gather."""

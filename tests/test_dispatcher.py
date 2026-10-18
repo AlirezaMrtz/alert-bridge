@@ -1,9 +1,11 @@
+import asyncio
 import re
 import httpx
 import pytest
 import respx
 from app.config import SinkConfig
 from app.dispatcher import SinkDispatcher, SinkResult
+from app.sinks.webhook import WebhookSink
 
 
 @pytest.mark.asyncio
@@ -63,3 +65,39 @@ async def test_dispatch_many_detailed_error_propagation(http_client):
     assert res_missing.success is False
     assert res_missing.error is not None
     assert "Sink 'missing-sink' not found in configuration" in res_missing.error
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_semaphore_bounds_concurrency(http_client, monkeypatch):
+    sinks = [
+        SinkConfig(
+            id=f"sink-{i}",
+            type="webhook",
+            config={"url": f"https://example.com/{i}"},
+        )
+        for i in range(5)
+    ]
+    dispatcher = SinkDispatcher(sinks, http_client, max_concurrency=2)
+
+    active_count = 0
+    max_active = 0
+
+    async def mock_send(self, message: str, *, fmt: str = "text") -> tuple[bool, str | None]:
+        nonlocal active_count, max_active
+        active_count += 1
+        max_active = max(max_active, active_count)
+        await asyncio.sleep(0.05)
+        active_count -= 1
+        return (True, None)
+
+    monkeypatch.setattr(WebhookSink, "send", mock_send)
+
+    results = await dispatcher.dispatch_many(
+        [f"sink-{i}" for i in range(5)],
+        "Test message",
+    )
+
+    assert len(results) == 5
+    assert all(r.success for r in results)
+    assert max_active <= 2
+    assert max_active == 2
