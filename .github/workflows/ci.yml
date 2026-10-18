@@ -44,4 +44,9 @@ jobs:
             curl -sf http://localhost:8000/health && break || sleep 1
           done
           curl -f http://localhost:8000/health
+          status_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/alerts/prometheus-in \
+            -H "Content-Type: application/json" \
+            -H "X-Secret-Token: supersecrettoken123" \
+            -d '{"message": "CI container smoke test"}')
+          test "$status_code" -eq 202
           docker stop alert-bridge-test && docker rm alert-bridge-test

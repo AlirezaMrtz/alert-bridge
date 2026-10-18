@@ -44,13 +44,13 @@ A high-performance, asynchronous microservice built in Python 3.12 and FastAPI f
 | Security Layer | Implementation Mechanism | Threat Mitigated |
 | :--- | :--- | :--- |
 | **Sandboxed Jinja2** | `jinja2.sandbox.SandboxedEnvironment` | Defense-in-depth against arbitrary attribute/method access and privilege escalation in templates. |
-| **Execution Latency Bound** | `asyncio.wait_for(asyncio.to_thread(...), timeout=0.5)` | Bounds rendering execution latency per request to 500ms. |
+| **Execution Latency Bound** | `asyncio.wait_for(asyncio.to_thread(...), timeout=0.5)` | Bounds caller HTTP wait latency per request to 500ms (enforce container CPU/memory limits in production for worker thread isolation). |
 | **Constant-Time Auth** | `hmac.compare_digest(x_secret_token, expected)` | Side-channel timing attacks guessing secret tokens. |
 | **URL Path Sanitization** | `quote(str(room_id), safe="!:")` | RFC 3986 path percent-encoding preventing injection in Matrix room IDs. |
 | **Secret Hygiene** | Query parameter `token` stripping & masked log messages | Secret leakage into logs or Jinja2 context variables. |
 | **Connection Pooling & Lifecycle** | Shared `httpx.AsyncClient` in application lifespan | Resource leaks and connection overhead across high-throughput dispatches. |
-| **Fault Isolation** | `asyncio.wait_for(dispatch, timeout=35.0)` + `asyncio.gather` | Single hanging sink blocking delivery to sibling sinks. |
-| **Transient Fault & Rate-Limit Resilience** | 3-attempt exponential retry loop with HTTP 429 `Retry-After` clamping ($\le 2.0\text{s}$) | Prevents alert loss on transient 5xx spikes and rate-limit bursts while guaranteeing $\le 35.0\text{s}$ SLA bound. |
+| **Fault Isolation** | `asyncio.wait_for(dispatch, timeout=35.0)` + `asyncio.gather` + `asyncio.Semaphore(50)` concurrency backpressure | Single hanging sink blocking delivery to sibling sinks. |
+| **Transient Fault & Rate-Limit Resilience** | 3-attempt exponential retry loop with HTTP 429 `Retry-After` clamping (<= 2.0s) | Prevents alert loss on transient 5xx spikes and rate-limit bursts while guaranteeing <= 35.0s SLA bound. |
 | **Non-Root Container** | Custom `appuser` (UID 10001) in docker runtime stage | Privilege escalation inside container runtime environments. |
 
 ---
@@ -90,6 +90,20 @@ Environment: {{ params.env | default('prod') }}
 Cluster: {{ params.cluster }}
 ```
 
+#### Template Engine Features & Resilient Rendering
+
+The template engine wraps `jinja2.sandbox.SandboxedEnvironment` with defensive features designed for high-availability alerting:
+
+* **Resilient Key Traversal (`ChainableUndefined`):** Configured with `ChainableUndefined` so missing deeply nested fields (e.g. `{{ payload.metrics.cpu }}`) evaluate safely to an empty string instead of raising an `AttributeError` or crashing during an incident.
+* **RFC 3986 URL Encoding (`| urlencode`):** Built-in filter supporting both scalar strings and dictionaries for safely constructing percent-encoded query parameters and dashboard links:
+  ```jinja2
+  {# Scalar string encoding #}
+  [Search Logs](https://logs.internal/?query={{ payload.error | urlencode }})
+
+  {# Dictionary parameter encoding #}
+  [Grafana Dashboard](https://grafana.internal/d/alerts?{{ payload.dashboard_params | urlencode }})
+  ```
+
 #### Response Status Codes & Contracts
 
 | HTTP Status | Description | Response Body Example |
@@ -104,7 +118,7 @@ Cluster: {{ params.cluster }}
 
 ### 2. Health & Interactive Documentation
 
-* **Health Probe:** `GET /health` $\rightarrow$ `200 OK` `{"status": "ok"}`
+* **Health Probe:** `GET /health` -> `200 OK` `{"status": "ok"}`
 * **Interactive Swagger UI:** `GET /docs`
 * **ReDoc Specification:** `GET /redoc`
 * **OpenAPI JSON Schema:** `GET /openapi.json`
@@ -153,11 +167,17 @@ routes:
 ```
 
 ### Schema Rules & Validation
-* **`routes[].forward_to`**: Must contain at least one sink ID (`min_length=1`), and all referenced sink IDs must exist in `sinks`.
-* **`routes[].template_ref`**: Must reference a declared template in `templates`.
+* **`apiVersion`**: Constrained via `Literal["v1alpha1"]`.
+* **`templates[].engine`**: Constrained via `Literal["jinja2"]`.
+* **`templates[].format`**: Constrained via `Literal["text", "markdown", "html"]`; setting `"html"` enables `org.matrix.custom.html` (`formatted_body`) in Matrix sinks.
 * **`sinks[].type`**: Constrained via Pydantic `Literal["matrix", "webhook"]` to fail fast on typos during startup.
 * **`sinks[].config.homeserver_url`**: Explicitly required for Matrix sinks to prevent domain-guessing vulnerabilities.
 * **`sinks[].config.url`**: Required for Webhook sinks and must begin with `http://` or `https://`.
+* **`routes[].template_ref`**: Must reference a declared template in `templates`.
+* **`routes[].forward_to`**: Must contain at least one sink ID (`min_length=1`), and all referenced sink IDs must exist in `sinks`.
+* **ID Uniqueness**: All IDs across `sinks`, `templates`, and `routes` are validated for uniqueness at startup to prevent shadowed routes or sink collisions.
+* **Model Immutability**: All configuration models are immutable (`frozen=True`) with tuples for sequence fields (`forward_to`) to prevent runtime mutations.
+* **Whitespace Sanitization**: Nested string values inside `sinks[].config` (including headers and query dicts) are automatically stripped of leading and trailing whitespace.
 
 ---
 
@@ -189,6 +209,7 @@ Alert Bridge categorizes all log output under standard hierarchical loggers:
 * **Route Token Masking:** Route secrets use Pydantic's `SecretStr` to prevent plain-text token exposure in string representations or structured startup logs (`prometheus-in->**********`).
 * **Query Parameter Scrubbing:** Any `token` query parameters sent to the ingress endpoint are scrubbed prior to populating the `params` dictionary in Jinja2 template contexts.
 * **Payload Isolation on Failure:** Template rendering exceptions log structured error messages without dumping raw JSON payload dictionaries, preventing sensitive payload values from leaking into central logging systems.
+* **INFO-Level Payload Redaction:** `bridge.dispatcher` logs only `message_len` at `INFO` level, restricting raw rendered alert bodies to `DEBUG` to prevent sensitive incident data from leaking into production log aggregators.
 
 ---
 
