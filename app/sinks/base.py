@@ -15,7 +15,7 @@ class BaseSink(ABC):
         self.client = client
 
     @abstractmethod
-    async def send(self, message: str) -> tuple[bool, str | None]:
+    async def send(self, message: str, *, fmt: str = "text") -> tuple[bool, str | None]:
         """Sends a rendered text message to the configured sink.
 
         Must return (True, None) on success, (False, <reason>) on failure, and catch all exceptions.

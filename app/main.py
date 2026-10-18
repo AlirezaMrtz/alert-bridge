@@ -75,6 +75,7 @@ async def handle_alert(
     engine: TemplateEngine = app.state.engine
     template = config.template_by_id(route.template_ref)
     template_body = template.body if template else "{{ payload | tojson }}"
+    template_format = template.format if template else "text"
     
     success, rendered_message = await engine.render(template_body, payload, query_params)
     if not success:
@@ -85,7 +86,7 @@ async def handle_alert(
 
     # 5. Schedule background dispatch to sinks
     dispatcher: SinkDispatcher = app.state.dispatcher
-    background_tasks.add_task(dispatcher.dispatch_many, route.forward_to, rendered_message)
+    background_tasks.add_task(dispatcher.dispatch_many, route.forward_to, rendered_message, fmt=template_format)
 
     return {
         "status": "accepted",

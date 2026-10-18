@@ -44,7 +44,7 @@ def test_alert_ingress_authorized_header(client, mock_dispatch_many):
     assert data["status"] == "accepted"
     assert data["route"] == "prometheus-in"
     assert data["scheduled_sinks"] == ["matrix-ops"]
-    mock_dispatch_many.assert_called_once_with(("matrix-ops",), "**Alert**: Database backup completed successfully")
+    mock_dispatch_many.assert_called_once_with(("matrix-ops",), "**Alert**: Database backup completed successfully", fmt="markdown")
 
 
 def test_alert_ingress_query_params_passed(client, mock_dispatch_many):
@@ -59,7 +59,7 @@ def test_alert_ingress_query_params_passed(client, mock_dispatch_many):
     assert data["status"] == "accepted"
     assert data["route"] == "prometheus-in"
     assert data["scheduled_sinks"] == ["matrix-ops"]
-    mock_dispatch_many.assert_called_once_with(("matrix-ops",), "**Alert**: Service degraded")
+    mock_dispatch_many.assert_called_once_with(("matrix-ops",), "**Alert**: Service degraded", fmt="markdown")
 
 
 def test_token_query_param_scrubbed_from_template_context(client, mock_dispatch_many):
@@ -72,7 +72,7 @@ def test_token_query_param_scrubbed_from_template_context(client, mock_dispatch_
     assert response.status_code == 202
     data = response.json()
     assert data["status"] == "accepted"
-    mock_dispatch_many.assert_called_once_with(("matrix-ops",), "**Alert**: Service degraded")
+    mock_dispatch_many.assert_called_once_with(("matrix-ops",), "**Alert**: Service degraded", fmt="markdown")
 
 
 def test_alert_ingress_render_failure_returns_500_and_does_not_dispatch(client, mock_dispatch_many, monkeypatch):

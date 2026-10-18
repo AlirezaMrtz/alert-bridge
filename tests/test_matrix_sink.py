@@ -36,6 +36,35 @@ async def test_matrix_sink_success(http_client):
 
 @pytest.mark.asyncio
 @respx.mock
+async def test_matrix_sink_html_format_payload(http_client):
+    sink_config = {
+        "room_id": "!abc123:matrix.example.com",
+        "access_token": "secret-token",
+        "homeserver_url": "https://matrix.example.com",
+    }
+    sink = MatrixSink(sink_id="test-matrix", config=sink_config, client=http_client)
+
+    route = respx.put(
+        url=re.compile(r"https://matrix\.example\.com/_matrix/client/v3/rooms/.*")
+    ).mock(return_value=httpx.Response(200, json={"event_id": "$12345"}))
+
+    success, error = await sink.send("<b>Alert</b>", fmt="html")
+    assert success is True
+    assert error is None
+    assert route.called
+
+    request = route.calls.last.request
+    assert request.headers["Authorization"] == "Bearer secret-token"
+
+    data = json.loads(request.content)
+    assert data["msgtype"] == "m.text"
+    assert data["body"] == "<b>Alert</b>"
+    assert data["format"] == "org.matrix.custom.html"
+    assert data["formatted_body"] == "<b>Alert</b>"
+
+
+@pytest.mark.asyncio
+@respx.mock
 async def test_matrix_sink_url_encoding_special_chars(http_client):
     sink_config = {
         "room_id": "!room with space:server?token=LEAK",

@@ -18,7 +18,7 @@ MAX_ATTEMPTS = 3
 class MatrixSink(BaseSink):
     """Concrete sink implementation for dispatching messages to Matrix rooms."""
 
-    async def send(self, message: str) -> tuple[bool, str | None]:
+    async def send(self, message: str, *, fmt: str = "text") -> tuple[bool, str | None]:
         room_id = self.config.get("room_id")
         access_token = self.config.get("access_token")
 
@@ -46,10 +46,13 @@ class MatrixSink(BaseSink):
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
-        json_data = {
+        json_data: dict[str, Any] = {
             "msgtype": "m.text",
             "body": message,
         }
+        if fmt == "html":
+            json_data["format"] = "org.matrix.custom.html"
+            json_data["formatted_body"] = message
 
         for attempt in range(MAX_ATTEMPTS):
             try:

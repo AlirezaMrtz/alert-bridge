@@ -16,7 +16,7 @@ MAX_ATTEMPTS = 3
 class WebhookSink(BaseSink):
     """Concrete sink implementation for dispatching messages to generic HTTP webhooks."""
 
-    async def send(self, message: str) -> tuple[bool, str | None]:
+    async def send(self, message: str, *, fmt: str = "text") -> tuple[bool, str | None]:
         url = self.config.get("url")
         if not url:
             err_msg = f"Webhook sink '{self.sink_id}' missing required configuration 'url'"
