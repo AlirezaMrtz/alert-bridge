@@ -55,6 +55,7 @@ class TemplateEngine:
             logger.error(err_msg)
             return (False, err_msg)
         except Exception as exc:
-            err_msg = f"Template rendering failed: {exc}"
+            # Jinja exception messages can include runtime payload values.
+            err_msg = f"Template rendering failed ({type(exc).__name__})"
             logger.error(err_msg)
             return (False, err_msg)
