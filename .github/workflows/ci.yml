@@ -6,9 +6,13 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   test-and-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repository
@@ -25,7 +29,7 @@ jobs:
           enable-cache: true
 
       - name: Install dependencies
-        run: uv sync --all-groups
+        run: uv sync --locked --all-groups
 
       - name: Run test suite
         run: uv run pytest -v
@@ -34,19 +38,33 @@ jobs:
         run: docker build -t alert-bridge:test .
 
       - name: Smoke Test Container
+        shell: bash
         run: |
+          set -euo pipefail
+          trap 'docker rm -f alert-bridge-test >/dev/null 2>&1 || true' EXIT
           docker run -d -p 8000:8000 --name alert-bridge-test \
             -v "${{ github.workspace }}/tests/fixtures/valid_config.yaml:/app/config.yaml:ro" \
             -e ALERT_BRIDGE_CONFIG=/app/config.yaml \
             -e MATRIX_TOKEN=ci-matrix-token \
             alert-bridge:test
-          for i in $(seq 1 10); do
-            curl -sf http://localhost:8000/health && break || sleep 1
+          ready=0
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/health >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
           done
-          curl -f http://localhost:8000/health
+          if [ "$ready" -ne 1 ]; then
+            docker logs alert-bridge-test
+            exit 1
+          fi
           status_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://localhost:8000/alerts/prometheus-in \
             -H "Content-Type: application/json" \
             -H "X-Secret-Token: supersecrettoken123" \
             -d '{"message": "CI container smoke test"}')
           test "$status_code" -eq 202
-          docker stop alert-bridge-test && docker rm alert-bridge-test
+          unauthorized_code=$(curl -s -o /dev/null -w "%{http_code}" -X POST http://127.0.0.1:8000/alerts/prometheus-in \
+            -H "Content-Type: application/json" \
+            -d '{"message": "Unauthorized CI smoke test"}')
+          test "$unauthorized_code" -eq 401
