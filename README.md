@@ -46,6 +46,7 @@ A high-performance, asynchronous microservice built in Python 3.12 and FastAPI f
 | **Sandboxed Jinja2** | `jinja2.sandbox.SandboxedEnvironment` | Defense-in-depth against arbitrary attribute/method access and privilege escalation in templates. |
 | **Execution Latency Bound** | `asyncio.wait_for(asyncio.to_thread(...), timeout=0.5)` | Bounds caller HTTP wait latency per request to 500ms (enforce container CPU/memory limits in production for worker thread isolation). |
 | **Constant-Time Auth** | `hmac.compare_digest(x_secret_token, expected)` | Side-channel timing attacks guessing secret tokens. |
+| **Authentication-First, Size-Bounded Payload Parsing** | `read_alert_payload()` stream cap (`1 MiB`) after HMAC check | Avoids unauthenticated JSON parsing and rejects oversized bodies before JSON decoding. |
 | **URL Path Sanitization** | `quote(str(room_id), safe="!:")` | RFC 3986 path percent-encoding preventing injection in Matrix room IDs. |
 | **Secret Hygiene** | Query parameter `token` stripping & masked log messages | Secret leakage into logs or Jinja2 context variables. |
 | **Connection Pooling & Lifecycle** | Shared `httpx.AsyncClient` in application lifespan | Resource leaks and connection overhead across high-throughput dispatches. |
@@ -111,8 +112,11 @@ The template engine wraps `jinja2.sandbox.SandboxedEnvironment` with defensive f
 | **`202 Accepted`** | Successfully validated, rendered, and queued for async delivery. | `{"status": "accepted", "route": "prometheus-in", "scheduled_sinks": ["matrix-ops", "slack-devs"]}` |
 | **`401 Unauthorized`** | Missing or invalid `X-Secret-Token` header. | `{"detail": "Invalid or missing secret token"}` |
 | **`404 Not Found`** | The requested `route_id` is not declared in configuration. | `{"detail": "Route 'unknown-route' not found"}` |
-| **`422 Unprocessable Entity`** | Malformed JSON request payload. | `{"detail": [{"loc": ["body"], "msg": "JSON decode error"}]}` |
-| **`500 Internal Server Error`** | Template render failure or timeout (>0.5s); delivery halted. | `{"detail": "Template rendering failed: ..."}` (timeout variant: `{"detail": "Template rendering timed out (>0.5s)"}`) |
+| **`413 Payload Too Large`** | Alert body exceeds 1 MiB (checked after authentication). | `{"detail": "Alert payload too large"}` |
+| **`422 Unprocessable Entity`** | Invalid JSON, non-object JSON, or a nonempty body without a JSON Content-Type. | `{"detail": [{"loc": ["body"], "msg": "JSON decode error", "type": "json_invalid"}]}` |
+| **`500 Internal Server Error`** | Template render failure or timeout (>0.5s); delivery halted. | `{"detail": "Template rendering failed (SecurityError)"}` (timeout variant: `{"detail": "Template rendering timed out (>0.5s)"}`) |
+
+Nonempty bodies require `application/json` or an `application/*+json` media type. Empty bodies and JSON `null` retain the default empty object. The 1 MiB limit applies to the received bytes, including when Content-Length is missing or understates the size. The limit bounds the application body buffer; it does not impose a request rate limit or a server-wide memory limit.
 
 ---
 
@@ -205,11 +209,12 @@ Alert Bridge categorizes all log output under standard hierarchical loggers:
 | `bridge.sinks.matrix` | Matrix room message formatting, endpoint construction, and HTTP status handling. |
 | `bridge.sinks.webhook` | Generic webhook body generation, custom header injection, and HTTP delivery. |
 
-### Zero-Leak Credential Hygiene
+### Credential Hygiene
 * **Route Token Masking:** Route secrets use Pydantic's `SecretStr` to prevent plain-text token exposure in string representations or structured startup logs (`prometheus-in->**********`).
 * **Query Parameter Scrubbing:** Any `token` query parameters sent to the ingress endpoint are scrubbed prior to populating the `params` dictionary in Jinja2 template contexts.
-* **Payload Isolation on Failure:** Template rendering exceptions log structured error messages without dumping raw JSON payload dictionaries, preventing sensitive payload values from leaking into central logging systems.
-* **INFO-Level Payload Redaction:** `bridge.dispatcher` logs only `message_len` at `INFO` level, restricting raw rendered alert bodies to `DEBUG` to prevent sensitive incident data from leaking into production log aggregators.
+* **Payload Isolation on Failure:** Template rendering failures report only the exception class in logs and API responses, because raw exception messages can include sensitive payload values.
+* **Rendered Payload & URL Redaction:** `bridge.dispatcher` logs only `message_len`, never raw rendered alert bodies, while sink transport errors are sanitized to avoid leaking credential-bearing webhook URLs.
+* **Transport Logging:** Application startup sets `httpx` and `httpcore` loggers to `WARNING` to suppress request URLs and low-level DEBUG details. Keep these levels when supplying custom logging configuration. Configure reverse-proxy and server access logs separately to avoid recording sensitive query parameters.
 
 ---
 

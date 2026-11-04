@@ -49,7 +49,6 @@ class SinkDispatcher:
             return (False, err_msg)
 
         logger.info("Dispatching alert to sink '%s' (type: %s, message_len=%d)", sink_id, sink_config.type, len(message))
-        logger.debug("Rendered message payload for sink '%s': %r", sink_id, message)
         sink_instance = sink_class(sink_config.id, sink_config.config, self.client)
         async with self._semaphore:
             return await sink_instance.send(message, fmt=fmt)
@@ -67,8 +66,10 @@ class SinkDispatcher:
                 logger.error("Dispatch timed out for sink '%s'", sink_id)
                 return SinkResult(sink_id=sink_id, success=False, error="Dispatch timed out")
             except Exception as exc:
-                logger.error("Unhandled exception dispatching to sink '%s': %s", sink_id, exc)
-                return SinkResult(sink_id=sink_id, success=False, error=str(exc))
+                # Exceptions may contain destination URLs or other sensitive data.
+                error_type = type(exc).__name__
+                logger.error("Unhandled exception dispatching to sink '%s' (%s)", sink_id, error_type)
+                return SinkResult(sink_id=sink_id, success=False, error=f"Unhandled sink error ({error_type})")
 
         results = await asyncio.gather(*[_dispatch_one(s_id) for s_id in sink_ids])
         return list(results)

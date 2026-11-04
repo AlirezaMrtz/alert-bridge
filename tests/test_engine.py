@@ -86,4 +86,4 @@ async def test_sandboxed_environment_blocks_rce_probes():
     # Invoking unsafe methods/subclasses raises SecurityError caught by render
     success, result = await engine.render("{{ ''.__class__.__mro__[1].__subclasses__() }}", {}, {})
     assert success is False
-    assert "access to attribute '__class__'" in result
+    assert result == "Template rendering failed (SecurityError)"

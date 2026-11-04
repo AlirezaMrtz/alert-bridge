@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from http import HTTPStatus
 import uuid
 from typing import Any
 from urllib.parse import quote
@@ -61,13 +62,17 @@ class MatrixSink(BaseSink):
                 return (True, None)
             except httpx.HTTPStatusError as exc:
                 status_code = exc.response.status_code
+                try:
+                    reason = HTTPStatus(status_code).phrase
+                except ValueError:
+                    reason = "Unknown status"
                 # Fail fast on 4xx client errors (except 429 Too Many Requests) without retrying
                 if 400 <= status_code < 500 and status_code != 429:
-                    err_msg = f"Matrix sink '{self.sink_id}' client error (HTTP {status_code}) sending message to room '{room_id}': {exc}"
+                    err_msg = f"Matrix sink '{self.sink_id}' client error (HTTP {status_code} {reason})"
                     logger.error(err_msg)
                     return (False, err_msg)
 
-                err_msg = f"Matrix sink '{self.sink_id}' HTTP {status_code} error sending message to room '{room_id}': {exc}"
+                err_msg = f"Matrix sink '{self.sink_id}' HTTP error (HTTP {status_code} {reason})"
                 if attempt < MAX_ATTEMPTS - 1:
                     retry_after = exc.response.headers.get("Retry-After")
                     try:
@@ -75,20 +80,22 @@ class MatrixSink(BaseSink):
                     except (ValueError, TypeError):
                         sleep_time = 0.05 * (2 ** attempt)
                     logger.warning(
-                        "Retrying Matrix sink '%s' (attempt %d/%d) after HTTP %d error: %s (sleeping %.2fs)",
-                        self.sink_id, attempt + 1, MAX_ATTEMPTS, status_code, exc, sleep_time
+                        "Retrying Matrix sink '%s' (attempt %d/%d) after HTTP %d (sleeping %.2fs)",
+                        self.sink_id, attempt + 1, MAX_ATTEMPTS, status_code, sleep_time
                     )
                     await asyncio.sleep(sleep_time)
                 else:
                     logger.error(err_msg)
                     return (False, err_msg)
-            except (httpx.TimeoutException, httpx.HTTPError) as exc:
-                err_msg = f"Matrix sink '{self.sink_id}' network/timeout error sending message to room '{room_id}': {exc}"
+            except httpx.HTTPError as exc:
+                # Keep exception messages out of logs; they can contain URLs.
+                cause = "Connection timed out" if isinstance(exc, httpx.TimeoutException) else type(exc).__name__
+                err_msg = f"Matrix sink '{self.sink_id}' network/timeout error: {cause}"
                 if attempt < MAX_ATTEMPTS - 1:
                     sleep_time = 0.05 * (2 ** attempt)
                     logger.warning(
-                        "Retrying Matrix sink '%s' (attempt %d/%d) after network error: %s (sleeping %.2fs)",
-                        self.sink_id, attempt + 1, MAX_ATTEMPTS, exc, sleep_time
+                        "Retrying Matrix sink '%s' (attempt %d/%d) after network error (%s, sleeping %.2fs)",
+                        self.sink_id, attempt + 1, MAX_ATTEMPTS, type(exc).__name__, sleep_time
                     )
                     await asyncio.sleep(sleep_time)
                 else:

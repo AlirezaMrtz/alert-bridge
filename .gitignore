@@ -28,6 +28,7 @@ htmlcov/
 .env.*
 !.env.example
 secrets.yaml
+config.yaml
 
 # IDE / Editor config
 .vscode/
