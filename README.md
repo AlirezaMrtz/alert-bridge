@@ -7,6 +7,35 @@
 
 A high-performance, asynchronous microservice built in Python 3.12 and FastAPI for accepting incoming webhooks (from Prometheus, Grafana, GitHub, etc.), securely authenticating callers, formatting payloads via sandboxed Jinja2 templates, and dispatching alerts concurrently to multi-channel sinks (Matrix, Slack, Discord, and generic HTTP webhooks).
 
+## Try the local demo
+
+From a checkout of this repository, with Python 3.12+ and `uv` installed:
+
+```bash
+uv sync --locked --all-groups
+uv run --locked python examples/local-demo/run.py
+```
+
+The demo starts the bridge and an HTTP receiver on automatically assigned
+loopback ports, rejects a request without a token, sends an authenticated alert,
+and checks the message received after template rendering and dispatch:
+
+```json
+{
+  "text": "Alert: CPU usage > 90%\nHost: demo-host\nEnvironment: local"
+}
+```
+
+It prints `Demo passed.` and exits with status 0 only after the receiver confirms
+the expected message. Both servers shut down automatically. No Matrix account,
+external webhook, or local `config.yaml` is needed. A fresh token is generated
+for each run; it is never printed or saved. Proxy routing is disabled inside
+the demo process so its HTTP traffic stays on the loopback interface.
+
+The first dependency installation needs access to your Python package index.
+After dependencies are installed, the demo runs without external network access.
+The demo uses [its own example configuration](examples/local-demo/bridge.yaml).
+
 ---
 
 ## 🏗️ Architecture & Request Lifecycle
