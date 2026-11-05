@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 import httpx
+from app.metrics import DeliveryMetrics
 
 
 class BaseSink(ABC):
@@ -13,6 +14,7 @@ class BaseSink(ABC):
         self.sink_id = sink_id
         self.config = config
         self.client = client
+        self.metrics: DeliveryMetrics | None = None
 
     @abstractmethod
     async def send(self, message: str, *, fmt: str = "text") -> tuple[bool, str | None]:

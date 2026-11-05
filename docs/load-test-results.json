@@ -1,0 +1,43 @@
+{
+  "checks": {
+    "saturation_503": true,
+    "recovery_202": true,
+    "all_accepted_received": true,
+    "gauges_drained": true
+  },
+  "environment": {
+    "python": "3.12.14",
+    "platform": "Linux-6.18.57-x86_64-with-glibc2.39",
+    "logical_cpus": 9,
+    "httpx": "0.28.1",
+    "uvicorn": "0.50.1"
+  },
+  "application_sha256": "d8bd4f89813ea10bc25c28356a702d72003e282d766749251999e89b0fedeaf4",
+  "parameters": {
+    "requests": 200,
+    "concurrency": 16,
+    "capacity": 8,
+    "send_concurrency": 2,
+    "delay": 0.05
+  },
+  "burst_status_counts": {
+    "202": 12,
+    "503": 188
+  },
+  "burst_seconds": 0.4775,
+  "burst_plus_drain_seconds": 0.7021,
+  "offered_requests_per_second": 418.88,
+  "accepted_deliveries_per_second_including_drain": 17.09,
+  "ingress_latency_ms": {
+    "202": {
+      "p50": 43.631,
+      "p95": 75.963
+    },
+    "503": {
+      "p50": 35.37,
+      "p95": 52.008
+    }
+  },
+  "receiver_peak_concurrency": 2,
+  "total_confirmed_messages_including_checks": 21
+}

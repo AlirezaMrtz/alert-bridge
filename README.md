@@ -260,6 +260,37 @@ Alert Bridge categorizes all log output under standard hierarchical loggers:
 | `bridge.sinks.matrix` | Matrix room message formatting, endpoint construction, and HTTP status handling. |
 | `bridge.sinks.webhook` | Generic webhook body generation, custom header injection, and HTTP delivery. |
 
+### Delivery metrics
+
+`GET /metrics` exposes per-worker Prometheus text metrics independently of delivery
+admission. The endpoint is unauthenticated; restrict it at your network/proxy
+boundary when operational details should be private.
+
+| Metric (prefix `alert_bridge_`) | Meaning |
+| --- | --- |
+| `delivery_capacity`, `delivery_outstanding` | Admission budget and reserved/waiting/active sink deliveries. |
+| `send_concurrency_limit`, `delivery_active` | Active-send limit and occupied slots, including retry backoff. |
+| `alerts_total{outcome}` | Accepted decisions or overload rejections; excludes other ingress errors. |
+| `deliveries_total{sink_id,outcome}` | Started target outcomes: success, failure, timeout, or cancelled. |
+| `retries_scheduled_total{sink_id,reason}` | Retry schedules by HTTP/network reason, not wire-attempt counts. |
+| `delivery_duration_seconds{sink_id}` | Histogram including semaphore waiting and retry time. |
+
+Counters reset on worker restart. Scrape individual workers/instances rather than
+a load-balanced mixture of workers. Labels contain configured sink IDs and fixed
+categories, never payloads, URLs, headers, or request IDs. Keep sink IDs nonsecret.
+Metrics do not provide a durable per-alert receipt or recovery mechanism.
+
+Run the [local saturation and load check](docs/load-testing.md):
+
+```bash
+uv run --locked python examples/local-demo/load.py
+```
+
+It first verifies deterministic saturation and recovery, then measures a finite
+concurrent burst against a delayed local receiver. Every accepted alert is checked
+against the received messages and delivery metrics. Reported results describe
+that local run, not a production throughput guarantee.
+
 ### Credential Hygiene
 * **Route Token Masking:** Route secrets use Pydantic's `SecretStr` to prevent plain-text token exposure in string representations or structured startup logs (`prometheus-in->**********`).
 * **Query Parameter Scrubbing:** Any `token` query parameters sent to the ingress endpoint are scrubbed prior to populating the `params` dictionary in Jinja2 template contexts.

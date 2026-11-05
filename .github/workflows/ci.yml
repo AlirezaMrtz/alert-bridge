@@ -37,6 +37,9 @@ jobs:
       - name: Run local demo
         run: uv run --locked python examples/local-demo/run.py
 
+      - name: Verify local saturation and recovery
+        run: uv run --locked python examples/local-demo/load.py --requests 40 --concurrency 8 --capacity 4 --delay 0.01
+
       - name: Build Docker image (Sanity Check)
         run: docker build -t alert-bridge:test .
 
