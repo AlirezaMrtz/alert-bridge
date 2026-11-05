@@ -79,6 +79,8 @@ class MatrixSink(BaseSink):
                         sleep_time = max(0.0, min(float(retry_after), 2.0)) if retry_after else 0.05 * (2 ** attempt)
                     except (ValueError, TypeError):
                         sleep_time = 0.05 * (2 ** attempt)
+                    if self.metrics is not None:
+                        self.metrics.retry(self.sink_id, "http")
                     logger.warning(
                         "Retrying Matrix sink '%s' (attempt %d/%d) after HTTP %d (sleeping %.2fs)",
                         self.sink_id, attempt + 1, MAX_ATTEMPTS, status_code, sleep_time
@@ -93,6 +95,8 @@ class MatrixSink(BaseSink):
                 err_msg = f"Matrix sink '{self.sink_id}' network/timeout error: {cause}"
                 if attempt < MAX_ATTEMPTS - 1:
                     sleep_time = 0.05 * (2 ** attempt)
+                    if self.metrics is not None:
+                        self.metrics.retry(self.sink_id, "network")
                     logger.warning(
                         "Retrying Matrix sink '%s' (attempt %d/%d) after network error (%s, sleeping %.2fs)",
                         self.sink_id, attempt + 1, MAX_ATTEMPTS, type(exc).__name__, sleep_time

@@ -10,10 +10,11 @@ from email.message import Message
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request, status
 from starlette.background import BackgroundTask
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 from starlette.types import Receive, Scope, Send
 
 from app.admission import DeliveryAdmission, Reservation
+from app.metrics import DeliveryMetrics
 from app.config import load_config, BridgeConfig
 from app.engine import TemplateEngine
 from app.dispatcher import SinkDispatcher
@@ -36,7 +37,8 @@ async def lifespan(app: FastAPI):
     app.state.engine = TemplateEngine()
     app.state.http_client = http_client
     app.state.admission = DeliveryAdmission(config.delivery.max_outstanding)
-    app.state.dispatcher = SinkDispatcher(config.sinks, http_client, config.delivery.max_concurrency)
+    app.state.metrics = DeliveryMetrics(s.id for s in config.sinks)
+    app.state.dispatcher = SinkDispatcher(config.sinks, http_client, config.delivery.max_concurrency, metrics=app.state.metrics)
     try:
         yield
     finally:
@@ -53,6 +55,16 @@ app = FastAPI(
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
     return {"status": "ok"}
+
+
+@app.get("/metrics", include_in_schema=False)
+async def metrics():
+    admission = app.state.admission
+    return Response(
+        app.state.metrics.render(capacity=admission.capacity, outstanding=admission.in_use,
+                                 concurrency=app.state.config.delivery.max_concurrency),
+        headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8", "Cache-Control": "no-store"},
+    )
 
 
 class DeliveryResponse(JSONResponse):
@@ -160,6 +172,7 @@ async def handle_alert(
 
     reservation = app.state.admission.try_reserve(len(route.forward_to))
     if reservation is None:
+        app.state.metrics.alerts["overloaded"] += 1
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Delivery capacity exhausted",
@@ -178,12 +191,14 @@ async def handle_alert(
             raise HTTPException(status_code=500, detail=rendered_message)
 
         dispatcher: SinkDispatcher = app.state.dispatcher
-        return DeliveryResponse(
+        response = DeliveryResponse(
             reservation,
             status_code=202,
             content={"status": "accepted", "route": route_id, "scheduled_sinks": list(route.forward_to)},
             background=BackgroundTask(dispatcher.dispatch_many, route.forward_to, rendered_message, fmt=template_format),
         )
+        app.state.metrics.alerts["accepted"] += 1
+        return response
     except BaseException:
         # Includes cancellation while reading or rendering, before response ownership.
         reservation.release()

@@ -108,8 +108,8 @@ read timeouts and resource limits remain necessary. Timed-out render threads
 can continue after their request releases its reservation.
 
 Fan-out collects a result for each target without aborting siblings on ordinary
-failures. The background caller does not persist those results. There are logs
-but no built-in delivery metrics or status API yet.
+failures. The background caller does not persist those results. The per-worker metrics endpoint counts outcomes, retries, and durations.
+Individual results still are not persisted or exposed through a status API.
 
 ## Retries and duplicates
 
@@ -154,10 +154,41 @@ settings. CI runs the same command alongside the existing test suite.
 
 ## Possible next steps
 
-Delivery metrics would make overload and failures easier to measure. A reproducible load test should establish actual
-throughput, latency, and resource use before making performance claims.
+The [local saturation/load check](load-testing.md) verifies overload, recovery,
+metrics, and receiver confirmations, and reports measurements for a finite burst.
+It is not a production capacity benchmark or a resource-usage profiler.
 
 Durable delivery is a separate architectural extension. It would require a
 persistent accepted-work record, recovery and acknowledgment rules, scheduled
 retries, duplicate handling, and tests that interrupt and restart the service.
 Adding a queue alone would not resolve all of those responsibilities.
+
+## Per-worker delivery metrics
+
+`GET /metrics` returns Prometheus text format. The collector is local to one
+ASGI worker and is updated on its event loop. It resets when that worker restarts.
+Scrape individual workers/instances if using multiple processes; random routing
+to different workers will not produce a coherent cumulative counter series.
+
+Metrics have fixed outcome/reason labels and configured sink IDs only. Payloads,
+URLs, HTTP headers, exception strings, route parameters, and request IDs are not
+labels. Keep credentials out of sink IDs. The endpoint is unauthenticated; restrict
+access with your deployment network/proxy policy if these operational details
+should not be public. It remains available when admission is saturated.
+
+Accepted-alert counts represent a 202 decision in the handler, not proof that
+the response reached the caller. Validation/authentication failures are excluded;
+overload has a separate outcome. Per-sink outcomes count started target dispatches
+once at completion, including timeout and cancellation. A disconnect before
+background work starts may leave an accepted count with no target outcome.
+
+The delivery histogram includes semaphore waiting and retry backoff; it is not
+HTTP-attempt latency. Active-send gauges include retry waits while a semaphore
+slot is held. Retry counters count schedules before sleeping; cancellation can
+prevent the next HTTP attempt. Counters and gauges are not durable delivery state.
+
+The exporter implements the small fixed metric set in Prometheus text format
+without a new runtime dependency. Escaping, cumulative histogram buckets, label
+cardinality, lifecycle isolation, retries, cancellation, and timeout cleanup have
+regression coverage. Broader telemetry requirements would justify adopting a
+full client library instead of extending this collector indefinitely.
