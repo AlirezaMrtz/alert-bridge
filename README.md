@@ -42,8 +42,9 @@ The demo uses [its own example configuration](examples/local-demo/bridge.yaml).
 
 ```mermaid
 flowchart TD
-    Source["Webhook source"] --> Ingress["Route, token, size, and JSON checks"]
+    Source["Webhook source"] --> Ingress["Route, token, admission, size, and JSON checks"]
     Ingress -->|invalid| Rejected["4xx response"]
+    Ingress -->|overloaded| Overloaded["503 and Retry-After"]
     Ingress -->|valid| Template["Sandboxed Jinja2 template"]
     Template -->|failure| Failed["500 response"]
     Template -->|success| Scheduled["202 and in-process background dispatch"]
@@ -55,7 +56,7 @@ flowchart TD
 2. **Strict Authentication:** The request is authenticated strictly via the `X-Secret-Token` HTTP header using `hmac.compare_digest` to prevent timing attacks.
 3. **Payload and template:** After authentication, the application reads at most 1 MiB into its body buffer, validates the JSON body, and renders the configured template. The 0.5-second render timeout limits how long the caller waits for the worker result; it does not terminate the worker thread.
 4. **Acknowledgment (`202 Accepted`):** The response means validation and rendering succeeded and background delivery was scheduled. It does not confirm receipt by a destination. A rendering failure returns `500` and prevents dispatch.
-5. **Background dispatch:** Sends use a shared HTTP client and a semaphore allowing at most 50 active sink sends per process. Each target has a 35-second timeout that includes waiting for a semaphore slot. Waiting tasks are not bounded by a separate admission limit.
+5. **Background dispatch:** Sends use a shared HTTP client and a semaphore allowing at most 50 active sink sends per process. Each target has a 35-second timeout that includes waiting for a semaphore slot. Admission reserves the complete fan-out before body parsing: at most 1,000 outstanding sink deliveries per process by default, including reservations, waiting sends, and active sends.
 
 Delivery is **best effort**. In-flight work can be lost on a crash or forced shutdown, and HTTP retries can produce duplicate messages. This service currently has no durable queue, delivery-status API, or recovery mechanism. See [design decisions and limitations](docs/design-decisions.md) for the reasoning and operating boundaries.
 
@@ -74,7 +75,7 @@ Delivery is **best effort**. In-flight work can be lost on a crash or forced shu
 | **URL Path Sanitization** | `quote(str(room_id), safe="!:")` | RFC 3986 path percent-encoding preventing injection in Matrix room IDs. |
 | **Secret Hygiene** | Query parameter `token` stripping & masked log messages | Secret leakage into logs or Jinja2 context variables. |
 | **Connection Pooling & Lifecycle** | Shared `httpx.AsyncClient` in application lifespan | Resource leaks and connection overhead across high-throughput dispatches. |
-| **Dispatch Concurrency and Timeout** | `asyncio.Semaphore(50)` + per-target `asyncio.wait_for(..., timeout=35.0)` | Limits active sink sends and isolates ordinary target failures. The timeout includes slot waiting; pending work can still accumulate. |
+| **Dispatch Concurrency and Timeout** | `asyncio.Semaphore(max_concurrency)` + per-target `asyncio.wait_for(..., timeout=35.0)` | Limits active sink sends and isolates ordinary target failures. The timeout includes slot waiting; pending work is bounded by the admission budget. |
 | **Transient Error Retries** | Up to 3 attempts for network errors, 5xx, and 429; numeric `Retry-After` clamped to 2 seconds | Retries selected transient failures. Exhausted retries can still fail, and an ambiguous network failure can cause duplicate delivery. |
 | **Non-Root Container** | Custom `appuser` (UID 10001) in docker runtime stage | Privilege escalation inside container runtime environments. |
 
@@ -138,6 +139,7 @@ The template engine uses `jinja2.sandbox.SandboxedEnvironment` with missing-key 
 | **`404 Not Found`** | The requested `route_id` is not declared in configuration. | `{"detail": "Route 'unknown-route' not found"}` |
 | **`413 Payload Too Large`** | Alert body exceeds 1 MiB (checked after authentication). | `{"detail": "Alert payload too large"}` |
 | **`422 Unprocessable Entity`** | Invalid JSON, non-object JSON, or a nonempty body without a JSON Content-Type. | `{"detail": [{"loc": ["body"], "msg": "JSON decode error", "type": "json_invalid"}]}` |
+| **`503 Service Unavailable`** | Insufficient delivery capacity for the complete fan-out; no body parsing, rendering, or sends. Retry later (`Retry-After: 1`). | `{"detail": "Delivery capacity exhausted"}` |
 | **`500 Internal Server Error`** | Template render failure or timeout (>0.5s); delivery halted. | `{"detail": "Template rendering failed (SecurityError)"}` (timeout variant: `{"detail": "Template rendering timed out (>0.5s)"}`) |
 
 Nonempty bodies require `application/json` or an `application/*+json` media type. Empty bodies and JSON `null` retain the default empty object. The 1 MiB limit applies to the received bytes, including when Content-Length is missing or understates the size. The limit bounds the application body buffer; it does not impose a request rate limit or a server-wide memory limit.
@@ -193,6 +195,31 @@ routes:
       - matrix-ops
       - slack-devs
 ```
+
+### Delivery admission
+
+```yaml
+delivery:
+  max_outstanding: 1000
+  max_concurrency: 50
+```
+
+Both settings are positive integers, with the defaults above when omitted.
+`max_outstanding` counts sink deliveries, not alerts: a route with three targets
+reserves three units atomically. A route whose fan-out exceeds this budget is
+rejected at startup. `max_concurrency` limits active sends, including retry waits.
+
+The handler checks route and token first, then attempts admission without waiting.
+At capacity it returns `503` with `Retry-After: 1`, even if the body would otherwise
+be invalid or oversized. Nothing is partially scheduled. Callers should retry
+with backoff; the header is advice, not a guarantee that space will be available.
+
+The reservation covers body reading, rendering, response sending, and the entire
+background fan-out. It is released on completion, errors, and cancellation.
+A slow target conservatively holds the whole reservation until all targets finish.
+Each worker has its own budget. This limits delivery work, not total server
+memory, HTTP connections, request rate, or timed-out render threads; configure
+server/proxy read timeouts and resource limits separately.
 
 ### Schema Rules & Validation
 * **`apiVersion`**: Constrained via `Literal["v1alpha1"]`.

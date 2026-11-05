@@ -13,6 +13,7 @@ from app.sinks.matrix import MatrixSink
 from app.sinks.webhook import WebhookSink
 
 logger = logging.getLogger("bridge.dispatcher")
+DISPATCH_TIMEOUT_SECONDS = 35.0
 
 SINK_REGISTRY = {
     "matrix": MatrixSink,
@@ -59,7 +60,7 @@ class SinkDispatcher:
             try:
                 success, error = await asyncio.wait_for(
                     self.dispatch(sink_id, message, fmt=fmt),
-                    timeout=35.0,
+                    timeout=DISPATCH_TIMEOUT_SECONDS,
                 )
                 return SinkResult(sink_id=sink_id, success=success, error=error)
             except TimeoutError:

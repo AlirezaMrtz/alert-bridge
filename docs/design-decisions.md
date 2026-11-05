@@ -76,21 +76,40 @@ A crash or forced shutdown can lose work after the caller receives 202.
 This mode fits notifications where occasional loss is acceptable. Workloads
 requiring recovery of every accepted alert need a persistent delivery design.
 
-## Concurrency is bounded; pending work is not
+## Bounded admission and send concurrency
 
-The dispatcher allows at most 50 active sink sends per process. A semaphore
-slot covers the sink's retry loop, including its backoff waits. Multiple worker
-processes each have their own semaphore, so 50 is not a deployment-wide limit.
+The service reserves the entire route fan-out before reading the authenticated
+request body. `delivery.max_outstanding` defaults to 1,000 sink deliveries per
+process and includes reservations, pending sends, and active sends. Admission
+never waits: if the whole fan-out will not fit, HTTP 503 and Retry-After: 1 are
+returned without parsing, rendering, or scheduling any sends. Route lookup and
+authentication still take precedence. A route larger than the budget is a
+configuration error at startup.
 
-There is no bounded admission queue. Requests can create additional tasks
-waiting for slots, so sustained overload can increase memory use. A target's
-35-second timeout includes waiting for a slot: a healthy destination can time
-out before its send starts. Timeouts rely on cooperative asyncio cancellation
-and are not a hard wall-clock SLA under every failure or load condition.
+Reservations are synchronous event-loop operations, so checking and incrementing
+the count cannot interleave with another request. They are owned by one worker,
+not shared across threads or processes. A response-level finally block releases
+capacity even if response sending fails or delivery is cancelled. Exceptions
+before a response is created release capacity in the handler.
 
-Fan-out collects a result for each target, so an ordinary failure at one target
-does not abort its siblings. The background caller currently does not persist
-these results. There are logs but no built-in delivery metrics or status API.
+The full reservation is held until all targets finish. This is conservative: one
+slow target retains units already used by faster siblings. It avoids partial
+fan-out admission and gives callers one predictable overload response.
+
+`delivery.max_concurrency` defaults to 50 active sink sends, including retry
+backoff waits. The existing 35-second per-target timeout still includes waiting
+for a slot. It relies on cooperative asyncio cancellation, so it is not a hard
+wall-clock SLA. The outstanding budget bounds the number of waiting deliveries;
+it does not remove the possibility of a queue-wait timeout.
+
+Each worker has its own limits. This is not a global memory or request-rate cap,
+and an authenticated slow body reader can occupy a reservation. Deployment
+read timeouts and resource limits remain necessary. Timed-out render threads
+can continue after their request releases its reservation.
+
+Fan-out collects a result for each target without aborting siblings on ordinary
+failures. The background caller does not persist those results. There are logs
+but no built-in delivery metrics or status API yet.
 
 ## Retries and duplicates
 
@@ -135,8 +154,7 @@ settings. CI runs the same command alongside the existing test suite.
 
 ## Possible next steps
 
-Bounded admission and delivery metrics would make overload and failures easier
-to control and measure. A reproducible load test should establish actual
+Delivery metrics would make overload and failures easier to measure. A reproducible load test should establish actual
 throughput, latency, and resource use before making performance claims.
 
 Durable delivery is a separate architectural extension. It would require a

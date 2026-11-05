@@ -8,8 +8,12 @@ from contextlib import asynccontextmanager
 from email.message import Message
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request, status
+from fastapi import FastAPI, Header, HTTPException, Request, status
+from starlette.background import BackgroundTask
+from starlette.responses import JSONResponse
+from starlette.types import Receive, Scope, Send
 
+from app.admission import DeliveryAdmission, Reservation
 from app.config import load_config, BridgeConfig
 from app.engine import TemplateEngine
 from app.dispatcher import SinkDispatcher
@@ -31,7 +35,8 @@ async def lifespan(app: FastAPI):
     app.state.config = config
     app.state.engine = TemplateEngine()
     app.state.http_client = http_client
-    app.state.dispatcher = SinkDispatcher(config.sinks, http_client)
+    app.state.admission = DeliveryAdmission(config.delivery.max_outstanding)
+    app.state.dispatcher = SinkDispatcher(config.sinks, http_client, config.delivery.max_concurrency)
     try:
         yield
     finally:
@@ -48,6 +53,21 @@ app = FastAPI(
 @app.get("/health", status_code=status.HTTP_200_OK)
 async def health_check():
     return {"status": "ok"}
+
+
+class DeliveryResponse(JSONResponse):
+    """Hold admission through response sending and background delivery."""
+
+    def __init__(self, reservation: Reservation, **kwargs):
+        self.reservation = reservation
+        super().__init__(**kwargs)
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Also covers disconnects/cancellation before background work starts.
+            self.reservation.release()
 
 
 async def read_alert_payload(request: Request) -> dict:
@@ -107,6 +127,7 @@ async def read_alert_payload(request: Request) -> dict:
 @app.post(
     "/alerts/{route_id}",
     status_code=status.HTTP_202_ACCEPTED,
+    responses={503: {"description": "Delivery capacity exhausted; retry later"}},
     openapi_extra={
         "requestBody": {
             "content": {"application/json": {"schema": {"type": "object"}}},
@@ -117,7 +138,6 @@ async def read_alert_payload(request: Request) -> dict:
 async def handle_alert(
     route_id: str,
     request: Request,
-    background_tasks: BackgroundTasks,
     x_secret_token: str | None = Header(default=None, alias="X-Secret-Token"),
 ):
     config: BridgeConfig = app.state.config
@@ -138,31 +158,33 @@ async def handle_alert(
             detail="Invalid or missing secret token",
         )
 
-    # 3. Limit and parse the body only after checking the token.
-    payload = await read_alert_payload(request)
-
-    # 4. Extract query parameters for template rendering (excluding the auth token)
-    query_params = {k: v for k, v in request.query_params.items() if k != "token"}
-
-    # 5. Render template asynchronously
-    engine: TemplateEngine = app.state.engine
-    template = config.template_by_id(route.template_ref)
-    template_body = template.body if template else "{{ payload | tojson }}"
-    template_format = template.format if template else "text"
-    
-    success, rendered_message = await engine.render(template_body, payload, query_params)
-    if not success:
+    reservation = app.state.admission.try_reserve(len(route.forward_to))
+    if reservation is None:
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=rendered_message,
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Delivery capacity exhausted",
+            headers={"Retry-After": "1"},
         )
 
-    # 6. Schedule background dispatch to sinks
-    dispatcher: SinkDispatcher = app.state.dispatcher
-    background_tasks.add_task(dispatcher.dispatch_many, route.forward_to, rendered_message, fmt=template_format)
+    try:
+        payload = await read_alert_payload(request)
+        query_params = {k: v for k, v in request.query_params.items() if k != "token"}
+        engine: TemplateEngine = app.state.engine
+        template = config.template_by_id(route.template_ref)
+        template_body = template.body if template else "{{ payload | tojson }}"
+        template_format = template.format if template else "text"
+        success, rendered_message = await engine.render(template_body, payload, query_params)
+        if not success:
+            raise HTTPException(status_code=500, detail=rendered_message)
 
-    return {
-        "status": "accepted",
-        "route": route_id,
-        "scheduled_sinks": route.forward_to,
-    }
+        dispatcher: SinkDispatcher = app.state.dispatcher
+        return DeliveryResponse(
+            reservation,
+            status_code=202,
+            content={"status": "accepted", "route": route_id, "scheduled_sinks": list(route.forward_to)},
+            background=BackgroundTask(dispatcher.dispatch_many, route.forward_to, rendered_message, fmt=template_format),
+        )
+    except BaseException:
+        # Includes cancellation while reading or rendering, before response ownership.
+        reservation.release()
+        raise
