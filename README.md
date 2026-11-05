@@ -5,7 +5,7 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg)](https://fastapi.tiangolo.com)
 [![uv](https://img.shields.io/badge/packager-uv-purple.svg)](https://github.com/astral-sh/uv)
 
-A high-performance, asynchronous microservice built in Python 3.12 and FastAPI for accepting incoming webhooks (from Prometheus, Grafana, GitHub, etc.), securely authenticating callers, formatting payloads via sandboxed Jinja2 templates, and dispatching alerts concurrently to multi-channel sinks (Matrix, Slack, Discord, and generic HTTP webhooks).
+An asynchronous webhook router built with Python and FastAPI. It authenticates incoming alerts, renders messages with configurable Jinja2 templates, and forwards them to Matrix rooms or HTTP webhook destinations. Slack and Discord integrations use the generic HTTP sink with a destination-specific JSON configuration.
 
 ## Try the local demo
 
@@ -40,29 +40,24 @@ The demo uses [its own example configuration](examples/local-demo/bridge.yaml).
 
 ## 🏗️ Architecture & Request Lifecycle
 
-```
-[ Webhook Source ] ──( HTTP POST /alerts/{route_id} )──> [ FastAPI Web Ingress ]
- (Prometheus / Grafana)                                              │
-                                                       1. Constant-Time Auth Check (hmac)
-                                                       2. Extract Params & Payload
-                                                       3. Sandboxed Jinja2 Rendering
-                                                       4. HTTP 202 Accepted Response
-                                                                     │
-                                                           ( BackgroundTasks )
-                                                                     │
-                                                       5. Concurrent Dispatcher (Shared Client)
-                                                                     │
-                                                   ┌─────────────────┴─────────────────┐
-                                                   ▼                                   ▼
-                                           [ MatrixSink ]                      [ WebhookSink ]
-                                      (Matrix API Endpoint)                 (Slack/Discord/Custom)
+```mermaid
+flowchart TD
+    Source["Webhook source"] --> Ingress["Route, token, size, and JSON checks"]
+    Ingress -->|invalid| Rejected["4xx response"]
+    Ingress -->|valid| Template["Sandboxed Jinja2 template"]
+    Template -->|failure| Failed["500 response"]
+    Template -->|success| Scheduled["202 and in-process background dispatch"]
+    Scheduled --> Matrix["Matrix room"]
+    Scheduled --> Webhook["HTTP webhook"]
 ```
 
-1. **Ingress Ingest:** FastAPI receives the incoming HTTP POST webhook at `/alerts/{route_id}`.
+1. **Ingress:** FastAPI receives `POST /alerts/{route_id}` and looks up the configured route.
 2. **Strict Authentication:** The request is authenticated strictly via the `X-Secret-Token` HTTP header using `hmac.compare_digest` to prevent timing attacks.
-3. **Template Rendering:** The payload and URL query parameters are passed to an isolated `SandboxedEnvironment` Jinja2 engine wrapped in `asyncio.wait_for(..., timeout=0.5)` to bound request rendering latency.
-4. **Immediate Acknowledgment (`202 Accepted`):** The ingress controller returns an HTTP `202 Accepted` status immediately, decoupling caller response latency from downstream sink processing. If rendering fails, a `500 Internal Server Error` is returned immediately and background dispatch is aborted.
-5. **Concurrent Background Dispatch:** Delivery tasks execute concurrently via FastAPI `BackgroundTasks` and `asyncio.gather` over a shared connection pool (`httpx.AsyncClient`). Sinks run with fault isolation and a 35-second execution timeout per target.
+3. **Payload and template:** After authentication, the application reads at most 1 MiB into its body buffer, validates the JSON body, and renders the configured template. The 0.5-second render timeout limits how long the caller waits for the worker result; it does not terminate the worker thread.
+4. **Acknowledgment (`202 Accepted`):** The response means validation and rendering succeeded and background delivery was scheduled. It does not confirm receipt by a destination. A rendering failure returns `500` and prevents dispatch.
+5. **Background dispatch:** Sends use a shared HTTP client and a semaphore allowing at most 50 active sink sends per process. Each target has a 35-second timeout that includes waiting for a semaphore slot. Waiting tasks are not bounded by a separate admission limit.
+
+Delivery is **best effort**. In-flight work can be lost on a crash or forced shutdown, and HTTP retries can produce duplicate messages. This service currently has no durable queue, delivery-status API, or recovery mechanism. See [design decisions and limitations](docs/design-decisions.md) for the reasoning and operating boundaries.
 
 ---
 
@@ -73,14 +68,14 @@ The demo uses [its own example configuration](examples/local-demo/bridge.yaml).
 | Security Layer | Implementation Mechanism | Threat Mitigated |
 | :--- | :--- | :--- |
 | **Sandboxed Jinja2** | `jinja2.sandbox.SandboxedEnvironment` | Defense-in-depth against arbitrary attribute/method access and privilege escalation in templates. |
-| **Execution Latency Bound** | `asyncio.wait_for(asyncio.to_thread(...), timeout=0.5)` | Bounds caller HTTP wait latency per request to 500ms (enforce container CPU/memory limits in production for worker thread isolation). |
+| **Render Wait Timeout** | `asyncio.wait_for(asyncio.to_thread(...), timeout=0.5)` | Stops waiting for a slow render result; does not stop the worker thread or establish a response-time SLA under load. |
 | **Constant-Time Auth** | `hmac.compare_digest(x_secret_token, expected)` | Side-channel timing attacks guessing secret tokens. |
 | **Authentication-First, Size-Bounded Payload Parsing** | `read_alert_payload()` stream cap (`1 MiB`) after HMAC check | Avoids unauthenticated JSON parsing and rejects oversized bodies before JSON decoding. |
 | **URL Path Sanitization** | `quote(str(room_id), safe="!:")` | RFC 3986 path percent-encoding preventing injection in Matrix room IDs. |
 | **Secret Hygiene** | Query parameter `token` stripping & masked log messages | Secret leakage into logs or Jinja2 context variables. |
 | **Connection Pooling & Lifecycle** | Shared `httpx.AsyncClient` in application lifespan | Resource leaks and connection overhead across high-throughput dispatches. |
-| **Fault Isolation** | `asyncio.wait_for(dispatch, timeout=35.0)` + `asyncio.gather` + `asyncio.Semaphore(50)` concurrency backpressure | Single hanging sink blocking delivery to sibling sinks. |
-| **Transient Fault & Rate-Limit Resilience** | 3-attempt exponential retry loop with HTTP 429 `Retry-After` clamping (<= 2.0s) | Prevents alert loss on transient 5xx spikes and rate-limit bursts while guaranteeing <= 35.0s SLA bound. |
+| **Dispatch Concurrency and Timeout** | `asyncio.Semaphore(50)` + per-target `asyncio.wait_for(..., timeout=35.0)` | Limits active sink sends and isolates ordinary target failures. The timeout includes slot waiting; pending work can still accumulate. |
+| **Transient Error Retries** | Up to 3 attempts for network errors, 5xx, and 429; numeric `Retry-After` clamped to 2 seconds | Retries selected transient failures. Exhausted retries can still fail, and an ambiguous network failure can cause duplicate delivery. |
 | **Non-Root Container** | Custom `appuser` (UID 10001) in docker runtime stage | Privilege escalation inside container runtime environments. |
 
 ---
@@ -122,7 +117,7 @@ Cluster: {{ params.cluster }}
 
 #### Template Engine Features & Resilient Rendering
 
-The template engine wraps `jinja2.sandbox.SandboxedEnvironment` with defensive features designed for high-availability alerting:
+The template engine uses `jinja2.sandbox.SandboxedEnvironment` with missing-key handling and URL-encoding helpers for administrator-controlled templates:
 
 * **Resilient Key Traversal (`ChainableUndefined`):** Configured with `ChainableUndefined` so missing deeply nested fields (e.g. `{{ payload.metrics.cpu }}`) evaluate safely to an empty string instead of raising an `AttributeError` or crashing during an incident.
 * **RFC 3986 URL Encoding (`| urlencode`):** Built-in filter supporting both scalar strings and dictionaries for safely constructing percent-encoded query parameters and dashboard links:
@@ -138,7 +133,7 @@ The template engine wraps `jinja2.sandbox.SandboxedEnvironment` with defensive f
 
 | HTTP Status | Description | Response Body Example |
 | :--- | :--- | :--- |
-| **`202 Accepted`** | Successfully validated, rendered, and queued for async delivery. | `{"status": "accepted", "route": "prometheus-in", "scheduled_sinks": ["matrix-ops", "slack-devs"]}` |
+| **`202 Accepted`** | Validated, rendered, and scheduled for in-process background delivery; destination receipt is not confirmed. | `{"status": "accepted", "route": "prometheus-in", "scheduled_sinks": ["matrix-ops", "slack-devs"]}` |
 | **`401 Unauthorized`** | Missing or invalid `X-Secret-Token` header. | `{"detail": "Invalid or missing secret token"}` |
 | **`404 Not Found`** | The requested `route_id` is not declared in configuration. | `{"detail": "Route 'unknown-route' not found"}` |
 | **`413 Payload Too Large`** | Alert body exceeds 1 MiB (checked after authentication). | `{"detail": "Alert payload too large"}` |
@@ -209,7 +204,7 @@ routes:
 * **`routes[].template_ref`**: Must reference a declared template in `templates`.
 * **`routes[].forward_to`**: Must contain at least one sink ID (`min_length=1`), and all referenced sink IDs must exist in `sinks`.
 * **ID Uniqueness**: All IDs across `sinks`, `templates`, and `routes` are validated for uniqueness at startup to prevent shadowed routes or sink collisions.
-* **Model Immutability**: All configuration models are immutable (`frozen=True`) with tuples for sequence fields (`forward_to`) to prevent runtime mutations.
+* **Configuration Fields**: Models use `frozen=True` to prevent field reassignment, and `forward_to` is a tuple. Nested lists and dictionaries are not deeply immutable. Configuration is loaded at startup; there is no hot reload.
 * **Whitespace Sanitization**: Nested string values inside `sinks[].config` (including headers and query dicts) are automatically stripped of leading and trailing whitespace.
 
 ---
@@ -261,7 +256,7 @@ cd alert-bridge
 cp config.example.yaml config.yaml
 
 # Sync virtual environment and dependencies
-uv sync --all-groups
+uv sync --locked --all-groups
 ```
 
 ### Running the Server
@@ -283,6 +278,18 @@ uv run pytest -v
 ### Docker Compose
 Before starting the container, initialize `config.yaml` from the example template and export required environment variables:
 
+Each variable referenced by your configuration must also be passed into the
+container. Host exports and a Compose `.env` file do not automatically populate
+the container environment. For the example Matrix route, add these entries to
+the service's `environment` section in `docker-compose.yml`:
+
+```yaml
+environment:
+  - ALERT_BRIDGE_CONFIG=/app/config.yaml
+  - MATRIX_TOKEN=${MATRIX_TOKEN:?Set MATRIX_TOKEN}
+  - PROMETHEUS_SECRET_TOKEN=${PROMETHEUS_SECRET_TOKEN:?Set PROMETHEUS_SECRET_TOKEN}
+```
+
 ```bash
 # 1. Initialize configuration
 cp config.example.yaml config.yaml
@@ -295,4 +302,4 @@ export PROMETHEUS_SECRET_TOKEN="supersecrettoken123"
 docker compose up -d --build
 ```
 
-The container runs as a non-root system user (`appuser:10001`), mounts `config.yaml` read-only (`:ro`), and monitors container health via `GET /health`.
+The container runs as a non-root system user (`appuser:10001`), mounts `config.yaml` read-only (`:ro`), and monitors API health via `GET /health`. This health check does not verify downstream destinations or delivery success.
