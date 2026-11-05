@@ -77,6 +77,13 @@ class RouteConfig(BaseModel):
         return v
 
 
+class DeliveryConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_outstanding: int = Field(default=1000, gt=0, strict=True)
+    max_concurrency: int = Field(default=50, gt=0, strict=True)
+
+
 class BridgeConfig(BaseModel):
     model_config = ConfigDict(frozen=True, str_strip_whitespace=True)
 
@@ -84,6 +91,14 @@ class BridgeConfig(BaseModel):
     sinks: list[SinkConfig]
     templates: list[TemplateConfig]
     routes: list[RouteConfig]
+    delivery: DeliveryConfig = Field(default_factory=DeliveryConfig)
+
+    @model_validator(mode="after")
+    def validate_delivery_capacity(self) -> BridgeConfig:
+        for route in self.routes:
+            if len(route.forward_to) > self.delivery.max_outstanding:
+                raise ValueError(f"Route '{route.id}' fan-out exceeds delivery.max_outstanding")
+        return self
 
     @model_validator(mode="after")
     def validate_unique_ids(self) -> BridgeConfig:

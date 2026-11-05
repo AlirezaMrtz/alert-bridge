@@ -1,5 +1,9 @@
 apiVersion: v1alpha1
 
+delivery:
+  max_outstanding: 1000
+  max_concurrency: 50
+
 sinks:
   - id: matrix-ops
     type: matrix
