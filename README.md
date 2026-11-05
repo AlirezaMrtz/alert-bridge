@@ -361,3 +361,7 @@ docker compose up -d --build
 ```
 
 The container runs as a non-root system user (`appuser:10001`), mounts `config.yaml` read-only (`:ro`), and monitors API health via `GET /health`. This health check does not verify downstream destinations or delivery success.
+
+## License
+
+Licensed under the [MIT License](LICENSE).
