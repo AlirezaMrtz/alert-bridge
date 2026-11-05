@@ -1,0 +1,23 @@
+apiVersion: v1alpha1
+
+sinks:
+  - id: local-receiver
+    type: webhook
+    config:
+      url: "${DEMO_WEBHOOK_URL}"
+
+templates:
+  - id: local-alert
+    engine: jinja2
+    format: text
+    body: |
+      Alert: {{ payload.message }}
+      Host: {{ payload.host }}
+      Environment: {{ params.env }}
+
+routes:
+  - id: local-demo
+    secret_token: "${DEMO_ROUTE_TOKEN}"
+    template_ref: local-alert
+    forward_to:
+      - local-receiver

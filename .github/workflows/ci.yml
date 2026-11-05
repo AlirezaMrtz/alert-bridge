@@ -34,6 +34,9 @@ jobs:
       - name: Run test suite
         run: uv run pytest -v
 
+      - name: Run local demo
+        run: uv run --locked python examples/local-demo/run.py
+
       - name: Build Docker image (Sanity Check)
         run: docker build -t alert-bridge:test .
 
